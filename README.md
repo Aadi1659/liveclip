@@ -44,7 +44,7 @@ python liveclip.py "https://www.youtube.com/watch?v=LIVE_VIDEO_ID"
 - **Ctrl+C** to stop. Clips that are still being made get finished first.
 - `clips/clips.csv` logs every clip: when it was made, how fast the chat was and the top chat words.
 
-The first clip takes longer, because Whisper downloads its model (~500 MB for `small`).
+The first time you run it, Whisper downloads its model (~1.5 GB for `medium`) while the stream records, so start it a few minutes early.
 
 ## Useful options
 
@@ -53,8 +53,8 @@ The first clip takes longer, because Whisper downloads its model (~500 MB for `s
 | `--pre 25 --post 6` | Seconds kept before/after the chat spike. Chat reacts a few seconds late, so most of the clip comes *before* the spike |
 | `--spike 3` | How sudden the spike must be (3 = chat 3x faster than normal). Lower it for more clips, raise it for fewer |
 | `--cooldown 60` | Minimum seconds between two auto clips |
-| `--captions en` | Hindi/Hinglish speech written in Roman letters (default). `hi` = Hindi script, `auto` = detect, `off` = no captions |
-| `--model small` | Whisper size: `tiny`/`base` are faster, `medium` is more accurate |
+| `--captions hinglish` | Hindi/English speech in Roman letters, the way people type it (default). `english` = translated to English, `off` = no captions |
+| `--model medium` | Whisper size. `medium` (default) handles Hinglish well, about 10 s per clip. `small` is faster but garbles Hinglish |
 | `--layout crop` | Center-crop to 9:16 instead of the blurred-background layout |
 | `--max-clips 10 --duration 3600` | Stop after 10 clips or after 1 hour |
 

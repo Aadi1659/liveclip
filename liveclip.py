@@ -28,9 +28,11 @@ ap.add_argument("--cooldown", type=float, default=60, help="minimum seconds betw
 ap.add_argument("--warmup", type=float, default=60, help="seconds of chat to learn the normal rate before clipping")
 ap.add_argument("--max-clips", type=int, default=0, help="stop after this many clips (0 = no limit)")
 ap.add_argument("--duration", type=float, default=0, help="stop after this many seconds (0 = run until Ctrl+C)")
-ap.add_argument("--captions", choices=["en", "hi", "auto", "off"], default="en",
-                help="Whisper language. 'en' writes Hindi/Hinglish speech in Roman letters (default, renders everywhere)")
-ap.add_argument("--model", default="small", help="Whisper model: tiny, base, small, medium (bigger = better, slower)")
+ap.add_argument("--captions", choices=["hinglish", "english", "en", "hi", "auto", "off"], default="hinglish",
+                help="hinglish (default): Hindi/English speech in Roman letters. english: translated to English. "
+                     "en/hi/auto: plain Whisper language setting. off: no captions")
+ap.add_argument("--model", default="medium", help="Whisper model: small (fast), medium (default, much better Hinglish), "
+                                                  "large-v3 (best, slow)")
 ap.add_argument("--layout", choices=["blur", "crop"], default="blur", help="9:16 layout: blurred background or center crop")
 ap.add_argument("--font", default="", help="path to a .ttf font for captions")
 ap.add_argument("--keep", action="store_true", help="keep the raw recording segments when you stop")
@@ -149,25 +151,64 @@ def caption_png(text, path, W=1080):
 
 
 _whisper = None
+_wlock = threading.Lock()
+# With language="en", Whisper sometimes TRANSLATES Hindi speech into English. A natural Hinglish paragraph as the prompt
+# makes it write what was said, in Roman letters ("yaha pe main helipad dhoondh raha hoon"). Tested on 5 windows of a
+# Hindi GTA 6 stream, 19 Nov 2026: a short keyword prompt still translated the stream intro; this paragraph didn't.
+HINGLISH = ("Nahi yaar, yaha se rasta hi nahi hai. Bhai yeh dekho, agar aap naye ho toh follow kar lo. "
+            "Main abhi helicopter dhoondh raha hoon, kya scene hai, chalo chalo. Haan bhai, mast hai.")
+HINGLISH_2 = ("Haan bhai, aaj ka stream mast hone wala hai. Yeh dekho kya ho gaya, maine socha nahi tha. "
+              "Chalo mission start karte hain, tum log comment mein batao kaisa laga.")
+MARKERS = set("hai hain nahi nahin yaar bhai kya ka ki ke ko se mein me pe main hoon raha rahi tha toh yeh ye woh wo aur "
+              "bhi hi kar karo dekho".split())
+
+
+def hinglish_share(words):
+    ws = [re.sub(r"[^a-z']", "", w.word.lower()) for w in words]
+    ws = [w for w in ws if w]
+    return sum(w in MARKERS for w in ws) / max(1, len(ws))
+
+
+def whisper():
+    global _whisper
+    with _wlock:
+        if _whisper is None:
+            from faster_whisper import WhisperModel
+            say(f"loading Whisper '{a.model}' (the first run downloads it once, ~1.5 GB for medium)")
+            _whisper = WhisperModel(a.model, device="cpu", compute_type="int8")
+            say("Whisper ready")
+    return _whisper
 
 
 def transcribe(wav):
-    global _whisper
-    from faster_whisper import WhisperModel
-    if _whisper is None:
-        say(f"loading Whisper '{a.model}' (first time downloads the model)")
-        _whisper = WhisperModel(a.model, device="cpu", compute_type="int8")
-    lang = None if a.captions == "auto" else a.captions
-    segs, _ = _whisper.transcribe(wav, language=lang, word_timestamps=True, vad_filter=True,
-                                  initial_prompt="bhai kya scene hai, chalo chalo, yeh dekho" if lang == "en" else None)
+    mode = a.captions
+    kw = dict(word_timestamps=True, vad_filter=True, condition_on_previous_text=False, beam_size=5)
+    if mode in ("hinglish", "en"):
+        kw.update(language="en", initial_prompt=HINGLISH)
+    elif mode == "english":
+        kw.update(task="translate")
+    elif mode == "hi":
+        kw.update(language="hi")
+    segs, _ = whisper().transcribe(wav, **kw)
     words = [w for s in segs for w in (s.words or [])]
+    if mode in ("hinglish", "en") and words and hinglish_share(words) < 0.08:
+        # looks like an English translation (or an English-speaking streamer): try once more, keep the more Hinglish one
+        segs2, _ = whisper().transcribe(wav, **{**kw, "initial_prompt": HINGLISH_2})
+        words2 = [w for s in segs2 for w in (s.words or [])]
+        if hinglish_share(words2) > hinglish_share(words): words = words2
     chunks, cur = [], []
-    for w in words:                      # 3-5 words per caption, break on pauses
-        if cur and (len(cur) >= 4 or w.start - cur[-1].end > 0.6):
+    for w in words:                      # up to 4 words per caption; break on pauses and sentence ends
+        if cur and (len(cur) >= 4 or w.start - cur[-1].end > 0.6 or cur[-1].word.strip()[-1:] in ".?!,"):
             chunks.append(cur); cur = []
         cur.append(w)
     if cur: chunks.append(cur)
-    return [(c[0].start, c[-1].end, " ".join(x.word.strip() for x in c)) for c in chunks]
+    merged = []                          # a lone word ("ho", "hogi") joins the caption before it
+    for c in chunks:
+        if merged and len(c) == 1 and len(merged[-1]) <= 4 and c[0].start - merged[-1][-1].end < 0.5:
+            merged[-1] = merged[-1] + c
+        else:
+            merged.append(c)
+    return [(c[0].start, c[-1].end, " ".join(x.word.strip() for x in c).strip(" ,.")) for c in merged]
 
 
 def cut(t0, t1, name):
@@ -223,6 +264,7 @@ def main():
     say("Only clip streamers who allow it. Enter = clip now, Ctrl+C = stop.")
     threading.Thread(target=record, daemon=True).start()
     threading.Thread(target=chat, daemon=True).start()
+    if a.captions != "off": threading.Thread(target=whisper, daemon=True).start()
     manual = threading.Event()
 
     def keys():
