@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""liveclip: clip a live stream WHILE it is live, using the chat as the highlight detector.
+
+  python liveclip.py <youtube-or-twitch-live-url> [options]
+
+How it works
+  1. Streamlink records the live stream from the moment you start (6-second .ts segments, nothing is re-encoded).
+  2. A small script (chatread.py) reads the live chat. No login and no API key are needed.
+  3. When the chat suddenly explodes (messages per second jump well above the stream's normal rate), that moment is a
+     highlight. The script waits a few seconds, then FFmpeg cuts the last ~30 s into a 9:16 vertical clip.
+  4. faster-whisper (OpenAI's Whisper, run locally) writes the captions, and they are burned into the clip.
+
+While it runs: press Enter to clip the last few seconds by hand. Ctrl+C to stop.
+Only clip streamers who allow clipping or run a clipping program. Clips without permission get copyright strikes.
+"""
+import argparse, csv, os, re, shutil, signal, statistics, subprocess, sys, threading, time
+from collections import Counter, deque
+
+ap = argparse.ArgumentParser(description="Clip a live stream when its chat spikes.")
+ap.add_argument("url", help="YouTube or Twitch LIVE url")
+ap.add_argument("--out", default="clips", help="output folder (default: clips)")
+ap.add_argument("--quality", default="720p,720p60,480p,best", help="streamlink quality list")
+ap.add_argument("--pre", type=float, default=25, help="seconds before the chat spike to include (chat reacts late)")
+ap.add_argument("--post", type=float, default=6, help="seconds after the spike to include")
+ap.add_argument("--spike", type=float, default=3.0, help="spike = chat rate this many times the normal rate")
+ap.add_argument("--min-rate", type=float, default=1.5, help="ignore spikes below this many messages/second")
+ap.add_argument("--cooldown", type=float, default=60, help="minimum seconds between two auto clips")
+ap.add_argument("--warmup", type=float, default=60, help="seconds of chat to learn the normal rate before clipping")
+ap.add_argument("--max-clips", type=int, default=0, help="stop after this many clips (0 = no limit)")
+ap.add_argument("--duration", type=float, default=0, help="stop after this many seconds (0 = run until Ctrl+C)")
+ap.add_argument("--captions", choices=["en", "hi", "auto", "off"], default="en",
+                help="Whisper language. 'en' writes Hindi/Hinglish speech in Roman letters (default, renders everywhere)")
+ap.add_argument("--model", default="small", help="Whisper model: tiny, base, small, medium (bigger = better, slower)")
+ap.add_argument("--layout", choices=["blur", "crop"], default="blur", help="9:16 layout: blurred background or center crop")
+ap.add_argument("--font", default="", help="path to a .ttf font for captions")
+ap.add_argument("--keep", action="store_true", help="keep the raw recording segments when you stop")
+a = ap.parse_args()
+
+OUT = os.path.abspath(a.out); REC = os.path.join(OUT, ".rec"); os.makedirs(REC, exist_ok=True)
+SEGLIST = os.path.join(REC, "segments.csv")
+STOP = threading.Event()
+LOG = os.path.join(OUT, "clips.csv")
+
+
+def say(*m): print(time.strftime("%H:%M:%S"), *m, flush=True)
+
+
+for tool in ("ffmpeg", "ffprobe"):
+    if not shutil.which(tool): sys.exit(f"{tool} not found. Install FFmpeg first (Mac: brew install ffmpeg).")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+STREAMLINK = shutil.which("streamlink") or os.path.join(os.path.dirname(sys.executable), "streamlink")
+
+# ------------------------------------------------------------------ 1. record (streamlink -> ffmpeg 6 s segments)
+rec_start = None
+
+
+def record():
+    global rec_start
+    for f in os.listdir(REC): os.remove(os.path.join(REC, f))
+    sl = subprocess.Popen([STREAMLINK, "--stdout", "--hls-live-edge", "2", a.url, a.quality],
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    ff = subprocess.Popen(["ffmpeg", "-v", "error", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+                           "-f", "segment", "-segment_time", "6", "-segment_list", SEGLIST, "-segment_list_type", "csv",
+                           os.path.join(REC, "seg_%06d.ts")], stdin=sl.stdout)
+    sl.stdout.close()
+    while not STOP.is_set():
+        if rec_start is None and os.path.exists(os.path.join(REC, "seg_000000.ts")):
+            rec_start = time.time(); say("recording started")
+        if ff.poll() is not None:
+            say("recording stopped (stream ended or went offline)"); STOP.set(); break
+        time.sleep(0.2)
+    for p in (sl, ff):
+        if p.poll() is None: p.terminate()
+
+
+def segments():
+    """[(file, start, end)] of finished segments, in recording seconds."""
+    if not os.path.exists(SEGLIST): return []
+    out = []
+    for row in csv.reader(open(SEGLIST)):
+        if len(row) >= 3: out.append((os.path.join(REC, row[0]), float(row[1]), float(row[2])))
+    return out
+
+
+def rec_now():
+    return 0 if rec_start is None else time.time() - rec_start
+
+
+# ------------------------------------------------------------------ 2. chat (no login)
+chat_times = deque(maxlen=200000)   # (wallclock arrival, text)
+
+
+def chat():
+    from chatread import read
+    while not STOP.is_set():
+        try:
+            for msg in read(a.url):
+                if STOP.is_set(): return
+                chat_times.append((time.time(), msg))
+        except Exception as e:
+            if STOP.is_set(): return
+            say(f"chat reconnecting ({e})"); time.sleep(5)
+
+
+# ------------------------------------------------------------------ 3. spike detector
+def per_second(now, span):
+    """message counts per second for the last `span` seconds (oldest first)."""
+    c = [0] * int(span)
+    for t, _ in reversed(chat_times):
+        k = int(now - t)
+        if k >= span: break
+        if k >= 0: c[int(span) - 1 - k] += 1
+    return c
+
+
+def top_words(t0, t1, n=4):
+    words = Counter()
+    for t, msg in chat_times:
+        if t0 <= t <= t1:
+            for w in set(re.findall(r"[\w']{2,}", msg.lower())): words[w] += 1
+    return " ".join(w for w, _ in words.most_common(n))
+
+
+# ------------------------------------------------------------------ 4. cut + captions
+def font(size):
+    from PIL import ImageFont
+    cands = [a.font, "/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/Library/Fonts/Arial Bold.ttf",
+             "C:/Windows/Fonts/arialbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+    for c in cands:
+        if c and os.path.exists(c): return ImageFont.truetype(c, size)
+    return ImageFont.load_default(size)
+
+
+def caption_png(text, path, W=1080):
+    from PIL import Image, ImageDraw
+    f = font(64); d = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        t = (cur + " " + w).strip()
+        if d.textlength(t, font=f) > W - 160 and cur: lines.append(cur); cur = w
+        else: cur = t
+    if cur: lines.append(cur)
+    H = 90 * len(lines) + 40
+    im = Image.new("RGBA", (W, H), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    for i, ln in enumerate(lines):
+        x = (W - d.textlength(ln, font=f)) / 2
+        d.text((x, 20 + i * 90), ln, font=f, fill=(255, 255, 255, 255), stroke_width=7, stroke_fill=(0, 0, 0, 255))
+    im.save(path)
+
+
+_whisper = None
+
+
+def transcribe(wav):
+    global _whisper
+    from faster_whisper import WhisperModel
+    if _whisper is None:
+        say(f"loading Whisper '{a.model}' (first time downloads the model)")
+        _whisper = WhisperModel(a.model, device="cpu", compute_type="int8")
+    lang = None if a.captions == "auto" else a.captions
+    segs, _ = _whisper.transcribe(wav, language=lang, word_timestamps=True, vad_filter=True,
+                                  initial_prompt="bhai kya scene hai, chalo chalo, yeh dekho" if lang == "en" else None)
+    words = [w for s in segs for w in (s.words or [])]
+    chunks, cur = [], []
+    for w in words:                      # 3-5 words per caption, break on pauses
+        if cur and (len(cur) >= 4 or w.start - cur[-1].end > 0.6):
+            chunks.append(cur); cur = []
+        cur.append(w)
+    if cur: chunks.append(cur)
+    return [(c[0].start, c[-1].end, " ".join(x.word.strip() for x in c)) for c in chunks]
+
+
+def cut(t0, t1, name):
+    """t0/t1 in recording seconds -> OUT/name.mp4 (9:16, captions burned in)."""
+    deadline = time.time() + 60
+    while not any(e >= t1 for _, _, e in segments()):          # wait until the recording covers the window
+        if time.time() > deadline or STOP.is_set() and not segments(): say("not enough recording for", name); return None
+        time.sleep(1)
+    segs = [s for s in segments() if s[2] > t0 and s[1] < t1]
+    if not segs: return None
+    tmp = os.path.join(REC, name); os.makedirs(tmp, exist_ok=True)
+    lst = os.path.join(tmp, "list.txt")
+    open(lst, "w").write("".join(f"file '{f}'\n" for f, _, _ in segs))
+    raw = os.path.join(tmp, "raw.ts")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", raw], check=True)
+    ss, dur = max(0, t0 - segs[0][1]), t1 - t0
+    if a.layout == "blur":
+        vf = ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:2,"
+              "eq=brightness=-0.08[bg];[b]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]")
+    else:
+        vf = "[0:v]scale=-2:1920,crop=1080:1920[v0]"
+    inputs, last = ["-ss", f"{ss:.2f}", "-t", f"{dur:.2f}", "-i", raw], "v0"
+    if a.captions != "off":
+        wav = os.path.join(tmp, "a.wav")
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{ss:.2f}", "-t", f"{dur:.2f}", "-i", raw, "-vn", "-ac", "1",
+                        "-ar", "16000", wav], check=True)
+        try:
+            caps = transcribe(wav)
+        except Exception as e:
+            say("captions skipped:", e); caps = []
+        srt = []
+        for i, (s, e, txt) in enumerate(caps):
+            png = os.path.join(tmp, f"c{i}.png"); caption_png(txt, png); inputs += ["-i", png]
+            vf += f";[{last}][{i + 1}:v]overlay=0:H*0.70:enable='between(t,{s:.2f},{e + 0.1:.2f})'[v{i + 1}]"
+            last = f"v{i + 1}"
+            srt.append(f"{i + 1}\n{ts(s)} --> {ts(e)}\n{txt}\n")
+        if srt: open(os.path.join(OUT, name + ".srt"), "w").write("\n".join(srt))
+    out = os.path.join(OUT, name + ".mp4")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", vf, "-map", f"[{last}]", "-map", "0:a:0?",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-r", "30",
+                    "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out], check=True)
+    shutil.rmtree(tmp, ignore_errors=True)
+    return out
+
+
+def ts(s):
+    return f"{int(s // 3600):02d}:{int(s % 3600 // 60):02d}:{int(s % 60):02d},{int(s % 1 * 1000):03d}"
+
+
+# ------------------------------------------------------------------ main loop
+def main():
+    say(f"liveclip -> {OUT}")
+    say("Only clip streamers who allow it. Enter = clip now, Ctrl+C = stop.")
+    threading.Thread(target=record, daemon=True).start()
+    threading.Thread(target=chat, daemon=True).start()
+    manual = threading.Event()
+
+    def keys():
+        for _ in sys.stdin: manual.set()
+    if sys.stdin.isatty(): threading.Thread(target=keys, daemon=True).start()
+
+    signal.signal(signal.SIGINT, lambda *_: STOP.set())
+    t_begin, last_clip, n, jobs = time.time(), -1e9, 0, []
+    new = not os.path.exists(LOG)
+    logf = open(LOG, "a", newline=""); w = csv.writer(logf)
+    if new: w.writerow(["file", "made_at", "rec_from", "rec_to", "reason", "chat_rate", "normal_rate", "chat_words"])
+
+    def make(t_spike, reason, rate=0.0, base=0.0):
+        nonlocal n
+        n += 1; name = time.strftime("clip_%Y%m%d_%H%M%S")
+        t0, t1 = max(0, t_spike - a.pre), t_spike + a.post
+        words = top_words(rec_start + t0, rec_start + t1)
+        say(f"{reason}: clipping {t0:.0f}-{t1:.0f}s (chat {rate:.1f}/s vs normal {base:.1f}/s: {words})")
+
+        def job():
+            path = cut(t0, t1, name)
+            if path:
+                say("saved", path); w.writerow([os.path.basename(path), time.strftime("%H:%M:%S"), f"{t0:.1f}", f"{t1:.1f}",
+                                                 reason, f"{rate:.2f}", f"{base:.2f}", words]); logf.flush()
+        th = threading.Thread(target=job); th.start(); jobs.append(th)
+
+    while not STOP.is_set():
+        time.sleep(1)
+        if rec_start is None: continue
+        now = time.time()
+        if manual.is_set():
+            manual.clear(); make(rec_now() - 2, "manual")
+        sec = per_second(now, 160)
+        if now - t_begin < a.warmup or len(chat_times) < 20: continue
+        rate = sum(sec[-8:]) / 8                                   # chat comes in batches: use 8-second windows
+        hist = sec[:-8][-int(min(152, now - t_begin - 8)):]
+        bins = [sum(hist[i:i + 8]) / 8 for i in range(0, len(hist) - 7, 4)]
+        base = max(statistics.median(bins) if bins else 0, 0.2)
+        if rate >= max(a.spike * base, a.min_rate) and rec_now() - last_clip > a.cooldown:
+            last_clip = rec_now()
+            # wait for the reaction to peak (the moment itself is ~5-20 s before the chat peaks)
+            make(rec_now(), "chat spike", rate, base)
+        if a.max_clips and n >= a.max_clips: break
+        if a.duration and now - t_begin > a.duration: break
+    STOP.set()
+    say("stopping, finishing clips…")
+    for th in jobs: th.join()
+    logf.close()
+    if not a.keep: shutil.rmtree(REC, ignore_errors=True)
+    say(f"done: {n} clip(s) in {OUT}")
+
+
+if __name__ == "__main__":
+    main()
