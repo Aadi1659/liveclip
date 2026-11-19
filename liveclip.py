@@ -61,7 +61,7 @@ rec_start = None
 
 def record():
     global rec_start
-    for f in os.listdir(REC): os.remove(os.path.join(REC, f))
+    shutil.rmtree(REC, ignore_errors=True); os.makedirs(REC, exist_ok=True)   # leftovers from a force-stopped run
     sl = subprocess.Popen([STREAMLINK, "--stdout", "--hls-live-edge", "2", a.url, a.quality],
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
     ff = subprocess.Popen(["ffmpeg", "-v", "fatal", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
