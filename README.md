@@ -80,6 +80,6 @@ Claude reads `CLAUDE.md`, sets everything up and runs it for you. You can also a
 
 ## Honest notes
 - A chat spike means *something* happened. It doesn't guarantee a good clip, so watch each clip before you post it.
-- Big streams (50K+ viewers) have fast chat all the time. If you get too many clips, raise `--spike` to 4-5.
+- Big streams (50K+ viewers) already have fast chat, so it rarely triples. If you get no clips, lower `--spike` to 2 (what the phone version calls "normal"); too many, raise it.
 - Captions are auto-generated and can have mistakes. Fix them in Edits/CapCut, or edit the `.srt` file.
 - Clipping programs pay per view and usually have caps. Read each campaign's rules before you post.

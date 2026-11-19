@@ -63,10 +63,10 @@ def record():
     global rec_start
     for f in os.listdir(REC): os.remove(os.path.join(REC, f))
     sl = subprocess.Popen([STREAMLINK, "--stdout", "--hls-live-edge", "2", a.url, a.quality],
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    ff = subprocess.Popen(["ffmpeg", "-v", "error", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    ff = subprocess.Popen(["ffmpeg", "-v", "fatal", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
                            "-f", "segment", "-segment_time", "6", "-segment_list", SEGLIST, "-segment_list_type", "csv",
-                           os.path.join(REC, "seg_%06d.ts")], stdin=sl.stdout)
+                           os.path.join(REC, "seg_%06d.ts")], stdin=sl.stdout, start_new_session=True)
     sl.stdout.close()
     while not STOP.is_set():
         if rec_start is None and os.path.exists(os.path.join(REC, "seg_000000.ts")):
@@ -282,7 +282,7 @@ def ts(s):
 # ------------------------------------------------------------------ main loop
 def main():
     say(f"liveclip -> {OUT}")
-    say("Only clip streamers who allow it. Enter = clip now, Ctrl+C = stop.")
+    say("Only clip streamers who allow it. " + ("Enter = clip now, Ctrl+C = stop." if sys.stdin.isatty() else "Stop = finish open clips and quit."))
     rec_thread = threading.Thread(target=record, daemon=True); rec_thread.start()
     threading.Thread(target=chat, daemon=True).start()
     if a.captions != "off": threading.Thread(target=whisper, daemon=True).start()
@@ -297,6 +297,7 @@ def main():
         QUIT.set()
     signal.signal(signal.SIGINT, on_ctrl_c)
     t_begin, last_clip, n, jobs = time.time(), -1e9, 0, []
+    last_status = time.time()
     new = not os.path.exists(LOG)
     logf = open(LOG, "a", newline=""); w = csv.writer(logf)
     if new: w.writerow(["file", "made_at", "rec_from", "rec_to", "reason", "chat_rate", "normal_rate", "chat_words"])
@@ -322,11 +323,22 @@ def main():
         if manual.is_set():
             manual.clear(); make(rec_now() - 2, "manual")
         sec = per_second(now, 160)
-        if now - t_begin < a.warmup or len(chat_times) < 20: continue
+        warm = now - t_begin >= a.warmup and len(chat_times) >= 20
         rate = sum(sec[-8:]) / 8                                   # chat comes in batches: use 8-second windows
-        hist = sec[:-8][-int(min(152, now - t_begin - 8)):]
+        hist = sec[:-8][-int(min(152, max(8, now - t_begin - 8))):]
         bins = [sum(hist[i:i + 8]) / 8 for i in range(0, len(hist) - 7, 4)]
         base = max(statistics.median(bins) if bins else 0, 0.2)
+        if now - last_status >= 60:
+            last_status = now
+            m, s_ = divmod(int(rec_now()), 60)
+            if not chat_times:
+                say(f"status: {m}:{s_:02d} recorded · no chat messages yet (is the chat on?)")
+            elif not warm:
+                say(f"status: {m}:{s_:02d} recorded · chat {rate:.1f}/s · still learning the normal chat speed")
+            else:
+                say(f"status: {m}:{s_:02d} recorded · chat {rate:.1f}/s, normal {base:.1f}/s, "
+                    f"clips at {max(a.spike * base, a.min_rate):.1f}/s · {n} clip(s)")
+        if not warm: continue
         if rate >= max(a.spike * base, a.min_rate) and rec_now() - last_clip > a.cooldown:
             last_clip = rec_now()
             # wait for the reaction to peak (the moment itself is ~5-20 s before the chat peaks)
