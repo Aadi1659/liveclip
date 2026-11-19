@@ -199,8 +199,18 @@ def whisper():
     return _whisper
 
 
+def load_wav(path):
+    """16 kHz mono 16-bit WAV -> float32 array. faster-whisper's own loader uses PyAV, and newer PyAV versions (Colab)
+    break it ("unexpected keyword argument 'metadata_errors'"), so we hand Whisper the samples directly."""
+    import wave, numpy as np
+    with wave.open(path, "rb") as w:
+        pcm = w.readframes(w.getnframes())
+    return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def transcribe(wav):
     mode = a.captions
+    wav = load_wav(wav)
     kw = dict(word_timestamps=True, vad_filter=True, condition_on_previous_text=False, beam_size=5)
     if mode in ("hinglish", "en"):
         kw.update(language="en", initial_prompt=HINGLISH)
@@ -230,8 +240,16 @@ def transcribe(wav):
     return [(c[0].start, c[-1].end, " ".join(x.word.strip() for x in c).strip(" ,.")) for c in merged]
 
 
+_cut_lock = threading.Lock()   # one clip at a time: parallel encodes on a 2-core Colab machine all crawl
+
+
 def cut(t0, t1, name):
     """t0/t1 in recording seconds -> OUT/name.mp4 (9:16, captions burned in)."""
+    with _cut_lock:
+        return _cut(t0, t1, name)
+
+
+def _cut(t0, t1, name):
     deadline = time.time() + 60
     while not any(e >= t1 for _, _, e in segments()):          # wait until the recording covers the window
         if STOP.is_set(): break                                 # recording ended: cut what there is
@@ -247,15 +265,16 @@ def cut(t0, t1, name):
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", raw], check=True)
     ss, dur = max(0, t0 - segs[0][1]), t1 - t0
     if a.layout == "blur":
-        vf = ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:2,"
-              "eq=brightness=-0.08[bg];[b]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]")
+        # blur a 270x480 copy and scale it up: looks the same, ~10x cheaper than blurring at 1080x1920
+        vf = ("[0:v]split[a][b];[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=8:2,"
+              "scale=1080:1920,eq=brightness=-0.08[bg];[b]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]")
     else:
         vf = "[0:v]scale=-2:1920,crop=1080:1920[v0]"
     inputs, last = ["-ss", f"{ss:.2f}", "-t", f"{dur:.2f}", "-i", raw], "v0"
     if a.captions != "off":
         wav = os.path.join(tmp, "a.wav")
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{ss:.2f}", "-t", f"{dur:.2f}", "-i", raw, "-vn", "-ac", "1",
-                        "-ar", "16000", wav], check=True)
+        subprocess.run(["ffmpeg", "-v", "fatal", "-y", "-ss", f"{ss:.2f}", "-t", f"{dur:.2f}", "-i", raw, "-vn", "-ac", "1",
+                        "-ar", "16000", "-c:a", "pcm_s16le", wav], check=True)
         try:
             caps = transcribe(wav)
         except Exception as e:
@@ -268,7 +287,7 @@ def cut(t0, t1, name):
             srt.append(f"{i + 1}\n{ts(s)} --> {ts(e)}\n{txt}\n")
         if srt: open(os.path.join(OUT, name + ".srt"), "w").write("\n".join(srt))
     out = os.path.join(OUT, name + ".mp4")
-    subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", vf, "-map", f"[{last}]", "-map", "0:a:0?",
+    subprocess.run(["ffmpeg", "-v", "fatal", "-y", *inputs, "-filter_complex", vf, "-map", f"[{last}]", "-map", "0:a:0?",
                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-r", "30",
                     "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out], check=True)
     shutil.rmtree(tmp, ignore_errors=True)
