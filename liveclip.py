@@ -189,6 +189,9 @@ def whisper():
                     dev = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
                 except Exception:
                     dev = "cpu"
+            if a.model == "auto":                               # medium needs a GPU to be quick; small on a CPU
+                a.model = "medium" if dev == "cuda" else "small"
+                say(f"Whisper model: {a.model} ({dev})")
             try:
                 _whisper = WhisperModel(a.model, device=dev, compute_type="float16" if dev == "cuda" else "int8")
             except Exception as e:
