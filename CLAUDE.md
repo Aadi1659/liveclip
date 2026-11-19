@@ -9,3 +9,6 @@ This folder is a live-stream clipper. When the user gives you a live YouTube or 
 5. **To change behaviour** ("longer clips", "fewer clips", "only when chat says W"), prefer the flags (`--pre/--post`, `--spike`, `--cooldown`). Only edit `liveclip.py` when no flag covers it.
 
 How it works: `chatread.py` reads the chat (no login). `liveclip.py` records with Streamlink in 6 s segments and watches the chat rate in 8 s windows. When the rate is `--spike` times the stream's normal rate, it cuts `--pre` s before and `--post` s after into a 9:16 MP4 and burns in Whisper captions (drawn with Pillow, so FFmpeg doesn't need libass).
+
+
+`liveclip_colab.ipynb` is the phone version: a Colab notebook that clones this repo, installs the requirements and runs `liveclip.py` with `--device auto`, showing each clip inline with a download button. Regenerate it rather than hand-editing the JSON if the form changes.

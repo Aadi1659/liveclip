@@ -15,7 +15,19 @@ All four tools are free and open source. The catch: it only works while the stre
 
 ---
 
-## Setup (one time, ~10 minutes)
+## 📱 On your phone (free, no install)
+
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Aadi1659/liveclip/blob/main/liveclip_colab.ipynb)
+
+1. Tap **Open in Colab** above and sign in with any Google account.
+2. Paste the live stream link in the box (YouTube app: **Share → Copy link**) and tap the **▶ play button**. If Colab says *"This notebook was not authored by Google"*, tap **Run anyway**.
+3. Keep the tab open. Each clip shows up under the box as the chat spikes, with a **Download** button.
+
+It runs on Google's free Colab computers, so your phone only shows the results. Free Colab sessions stop after a few hours or when idle. For faster captions, pick **Runtime → Change runtime type → T4 GPU** first.
+
+---
+
+## On your laptop: setup (one time, ~10 minutes)
 
 You need **Python 3.10-3.12** and **FFmpeg**.
 
@@ -56,7 +68,8 @@ The first time you run it, Whisper downloads its model (~1.5 GB for `medium`) wh
 | `--captions hinglish` | Hindi/English speech in Roman letters, the way people type it (default). `english` = translated to English, `off` = no captions |
 | `--model medium` | Whisper size. `medium` (default) handles Hinglish well, about 10 s per clip. `small` is faster but garbles Hinglish |
 | `--layout crop` | Center-crop to 9:16 instead of the blurred-background layout |
-| `--max-clips 10 --duration 3600` | Stop after 10 clips or after 1 hour |
+| `--max-clips 10 --duration 3600` | Stop after 10 clips or after 1 hour (the last clip is still finished) |
+| `--device cuda` | Run Whisper on a GPU. `auto` (default) uses one when it's there |
 
 ## Use it with Claude Code
 

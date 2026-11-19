@@ -33,6 +33,8 @@ ap.add_argument("--captions", choices=["hinglish", "english", "en", "hi", "auto"
                      "en/hi/auto: plain Whisper language setting. off: no captions")
 ap.add_argument("--model", default="medium", help="Whisper model: small (fast), medium (default, much better Hinglish), "
                                                   "large-v3 (best, slow)")
+ap.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto",
+                help="where Whisper runs: auto uses a GPU when there is one (Colab GPU runtime), else the CPU")
 ap.add_argument("--layout", choices=["blur", "crop"], default="blur", help="9:16 layout: blurred background or center crop")
 ap.add_argument("--font", default="", help="path to a .ttf font for captions")
 ap.add_argument("--keep", action="store_true", help="keep the raw recording segments when you stop")
@@ -40,7 +42,8 @@ a = ap.parse_args()
 
 OUT = os.path.abspath(a.out); REC = os.path.join(OUT, ".rec"); os.makedirs(REC, exist_ok=True)
 SEGLIST = os.path.join(REC, "segments.csv")
-STOP = threading.Event()
+STOP = threading.Event()   # set when recording must end (stream offline, or everything is finished)
+QUIT = threading.Event()   # set by Ctrl+C / limits: stop making new clips, but keep recording until the open ones are cut
 LOG = os.path.join(OUT, "clips.csv")
 
 
@@ -73,6 +76,9 @@ def record():
         time.sleep(0.2)
     for p in (sl, ff):
         if p.poll() is None: p.terminate()
+    for p in (sl, ff):
+        try: p.wait(5)
+        except subprocess.TimeoutExpired: p.kill()
 
 
 def segments():
@@ -127,7 +133,8 @@ def top_words(t0, t1, n=4):
 def font(size):
     from PIL import ImageFont
     cands = [a.font, "/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/Library/Fonts/Arial Bold.ttf",
-             "C:/Windows/Fonts/arialbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+             "C:/Windows/Fonts/arialbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]
     for c in cands:
         if c and os.path.exists(c): return ImageFont.truetype(c, size)
     return ImageFont.load_default(size)
@@ -175,8 +182,20 @@ def whisper():
         if _whisper is None:
             from faster_whisper import WhisperModel
             say(f"loading Whisper '{a.model}' (the first run downloads it once, ~1.5 GB for medium)")
-            _whisper = WhisperModel(a.model, device="cpu", compute_type="int8")
-            say("Whisper ready")
+            dev = a.device
+            if dev == "auto":
+                try:
+                    import ctranslate2
+                    dev = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+                except Exception:
+                    dev = "cpu"
+            try:
+                _whisper = WhisperModel(a.model, device=dev, compute_type="float16" if dev == "cuda" else "int8")
+            except Exception as e:
+                if dev == "cpu": raise
+                say(f"GPU Whisper failed ({e}), using the CPU"); dev = "cpu"
+                _whisper = WhisperModel(a.model, device="cpu", compute_type="int8")
+            say(f"Whisper ready ({dev})")
     return _whisper
 
 
@@ -215,10 +234,12 @@ def cut(t0, t1, name):
     """t0/t1 in recording seconds -> OUT/name.mp4 (9:16, captions burned in)."""
     deadline = time.time() + 60
     while not any(e >= t1 for _, _, e in segments()):          # wait until the recording covers the window
-        if time.time() > deadline or STOP.is_set() and not segments(): say("not enough recording for", name); return None
+        if STOP.is_set(): break                                 # recording ended: cut what there is
+        if time.time() > deadline: say("not enough recording for", name); return None
         time.sleep(1)
     segs = [s for s in segments() if s[2] > t0 and s[1] < t1]
-    if not segs: return None
+    if not segs: say("not enough recording for", name); return None
+    t1 = min(t1, segs[-1][2])
     tmp = os.path.join(REC, name); os.makedirs(tmp, exist_ok=True)
     lst = os.path.join(tmp, "list.txt")
     open(lst, "w").write("".join(f"file '{f}'\n" for f, _, _ in segs))
@@ -262,7 +283,7 @@ def ts(s):
 def main():
     say(f"liveclip -> {OUT}")
     say("Only clip streamers who allow it. Enter = clip now, Ctrl+C = stop.")
-    threading.Thread(target=record, daemon=True).start()
+    rec_thread = threading.Thread(target=record, daemon=True); rec_thread.start()
     threading.Thread(target=chat, daemon=True).start()
     if a.captions != "off": threading.Thread(target=whisper, daemon=True).start()
     manual = threading.Event()
@@ -271,7 +292,10 @@ def main():
         for _ in sys.stdin: manual.set()
     if sys.stdin.isatty(): threading.Thread(target=keys, daemon=True).start()
 
-    signal.signal(signal.SIGINT, lambda *_: STOP.set())
+    def on_ctrl_c(*_):
+        if QUIT.is_set(): STOP.set()                            # second Ctrl+C: stop right now
+        QUIT.set()
+    signal.signal(signal.SIGINT, on_ctrl_c)
     t_begin, last_clip, n, jobs = time.time(), -1e9, 0, []
     new = not os.path.exists(LOG)
     logf = open(LOG, "a", newline=""); w = csv.writer(logf)
@@ -291,7 +315,7 @@ def main():
                                                  reason, f"{rate:.2f}", f"{base:.2f}", words]); logf.flush()
         th = threading.Thread(target=job); th.start(); jobs.append(th)
 
-    while not STOP.is_set():
+    while not STOP.is_set() and not QUIT.is_set():
         time.sleep(1)
         if rec_start is None: continue
         now = time.time()
@@ -309,9 +333,12 @@ def main():
             make(rec_now(), "chat spike", rate, base)
         if a.max_clips and n >= a.max_clips: break
         if a.duration and now - t_begin > a.duration: break
-    STOP.set()
-    say("stopping, finishing clips…")
+    QUIT.set()
+    if any(th.is_alive() for th in jobs):
+        say("stopping, finishing clips… (still recording the last seconds; Ctrl+C again to quit now)")
     for th in jobs: th.join()
+    STOP.set()
+    rec_thread.join(5)                                          # let streamlink/ffmpeg exit before the cleanup
     logf.close()
     if not a.keep: shutil.rmtree(REC, ignore_errors=True)
     say(f"done: {n} clip(s) in {OUT}")
