@@ -212,7 +212,7 @@ def clip_all(st, n, length, face_pct, style, lang, progress=gr.Progress()):
 
 
 # ---------- UI ----------
-BG, CARD, LINE, TEXT, MUTED, ACC = "#0b0b0f", "#14141a", "#24242d", "#f2efe9", "#8b8a93", "#ff6b35"
+BG, CARD, LINE, TEXT, MUTED, ACC = "#12061f", "rgba(18, 8, 30, 0.82)", "rgba(255,255,255,0.10)", "#f7f2ff", "#b9a9cc", "#ff6b35"
 _t = gr.themes.Base(primary_hue=gr.themes.colors.orange, neutral_hue=gr.themes.colors.zinc,
                     font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
                     radius_size=gr.themes.sizes.radius_lg)
@@ -225,18 +225,18 @@ _v = dict(
     block_label_text_size="13px", block_label_text_weight="600", block_label_padding="0 0 6px 0",
     block_title_text_color=MUTED, block_title_text_size="13px", block_title_text_weight="600",
     block_title_background_fill="transparent", block_title_padding="0 0 8px 0",
-    input_background_fill="#0f0f14", input_border_color=LINE, input_border_color_focus=ACC, input_radius="12px",
+    input_background_fill="rgba(10, 4, 18, 0.65)", input_border_color=LINE, input_border_color_focus=ACC, input_radius="12px",
     input_text_size="15px", input_padding="14px",
     border_color_primary=LINE, border_color_accent=ACC,
     color_accent=ACC, color_accent_soft="#2a1a12",
-    slider_color=ACC, checkbox_label_background_fill="#0f0f14", checkbox_label_background_fill_selected="#2a1a12",
+    slider_color=ACC, checkbox_label_background_fill="rgba(10, 4, 18, 0.65)", checkbox_label_background_fill_selected="#2a1a12",
     checkbox_label_border_color=LINE, checkbox_label_border_color_selected=ACC,
     checkbox_label_text_color=TEXT, checkbox_label_text_color_selected=TEXT, checkbox_background_color_selected=ACC,
     button_large_radius="14px", button_medium_radius="12px", button_large_text_size="16px",
     button_primary_background_fill=f"linear-gradient(135deg, {ACC}, #ff3d6e)",
     button_primary_background_fill_hover="linear-gradient(135deg, #ff7d4d, #ff5580)",
     button_primary_text_color="#fff", button_primary_border_color="transparent",
-    button_secondary_background_fill="#1c1c24", button_secondary_background_fill_hover="#24242e",
+    button_secondary_background_fill="rgba(255,255,255,0.06)", button_secondary_background_fill_hover="rgba(255,255,255,0.12)",
     button_secondary_text_color=TEXT, button_secondary_border_color=LINE,
 )
 _v = {k: v for k, v in _v.items() if hasattr(_t, k)}
@@ -262,6 +262,26 @@ footer {display: none !important}
 #status p {margin: 6px 0}
 #prev img {border-radius: 12px; cursor: crosshair}
 #note {text-align: center; color: #5f5e66; font-size: 13px; margin-top: 28px}
+/* GTA 6 / Vice City sunset */
+body, gradio-app, .gradio-container, .main, .wrap {background: transparent !important}
+html {background: #12061f}
+body::before {content: ""; position: fixed; inset: 0; z-index: -2;
+  background:
+    radial-gradient(1200px 600px at 85% 8%, rgba(255, 61, 110, 0.35), transparent 60%),
+    radial-gradient(900px 500px at 10% 20%, rgba(124, 58, 237, 0.35), transparent 60%),
+    linear-gradient(180deg, #12061f 0%, #2a0b45 30%, #6b1557 58%, #c2185b 78%, #ff6b35 100%);}
+body::after {content: ""; position: fixed; left: 0; right: 0; bottom: 0; height: 38vh; z-index: -1; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 34px),
+              repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 34px);
+  mask-image: linear-gradient(0deg, black, transparent); -webkit-mask-image: linear-gradient(0deg, black, transparent);
+  transform: perspective(400px) rotateX(55deg); transform-origin: bottom}
+.block, .form, .gr-group, .tabs {backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px)}
+#hero h1 {text-shadow: 0 0 40px rgba(255, 61, 110, 0.25)}
+#hero .eyebrow {background: rgba(255, 107, 53, 0.15); border-color: rgba(255, 107, 53, 0.4)}
+#hero p, .step em, #status, .hint {color: #d3c4e6 !important}
+#note {color: #fff3ea; opacity: .85}
+.tab-wrapper, [role=tablist], .tab-container {background: rgba(10, 4, 18, 0.85) !important; border-color: rgba(255,255,255,0.08) !important}
+[role=tab] {color: #d3c4e6 !important; font-weight: 600}
 .tab-nav button.selected, button[role=tab][aria-selected=true] {color: #ff8a5c !important; border-color: #ff6b35 !important}
 """
 
