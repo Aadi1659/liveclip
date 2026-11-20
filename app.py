@@ -212,36 +212,106 @@ def clip_all(st, n, length, face_pct, style, lang, progress=gr.Progress()):
 
 
 # ---------- UI ----------
+BG, CARD, LINE, TEXT, MUTED, ACC = "#0b0b0f", "#14141a", "#24242d", "#f2efe9", "#8b8a93", "#ff6b35"
+_t = gr.themes.Base(primary_hue=gr.themes.colors.orange, neutral_hue=gr.themes.colors.zinc,
+                    font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+                    radius_size=gr.themes.sizes.radius_lg)
+_v = dict(
+    body_background_fill=BG, body_text_color=TEXT, body_text_color_subdued=MUTED,
+    background_fill_primary=CARD, background_fill_secondary=BG,
+    block_background_fill=CARD, block_border_color=LINE, block_border_width="1px", block_radius="18px",
+    block_shadow="none", block_padding="18px",
+    block_label_background_fill="transparent", block_label_text_color=MUTED, block_label_border_width="0px",
+    block_label_text_size="13px", block_label_text_weight="600", block_label_padding="0 0 6px 0",
+    block_title_text_color=MUTED, block_title_text_size="13px", block_title_text_weight="600",
+    block_title_background_fill="transparent", block_title_padding="0 0 8px 0",
+    input_background_fill="#0f0f14", input_border_color=LINE, input_border_color_focus=ACC, input_radius="12px",
+    input_text_size="15px", input_padding="14px",
+    border_color_primary=LINE, border_color_accent=ACC,
+    color_accent=ACC, color_accent_soft="#2a1a12",
+    slider_color=ACC, checkbox_label_background_fill="#0f0f14", checkbox_label_background_fill_selected="#2a1a12",
+    checkbox_label_border_color=LINE, checkbox_label_border_color_selected=ACC,
+    checkbox_label_text_color=TEXT, checkbox_label_text_color_selected=TEXT, checkbox_background_color_selected=ACC,
+    button_large_radius="14px", button_medium_radius="12px", button_large_text_size="16px",
+    button_primary_background_fill=f"linear-gradient(135deg, {ACC}, #ff3d6e)",
+    button_primary_background_fill_hover="linear-gradient(135deg, #ff7d4d, #ff5580)",
+    button_primary_text_color="#fff", button_primary_border_color="transparent",
+    button_secondary_background_fill="#1c1c24", button_secondary_background_fill_hover="#24242e",
+    button_secondary_text_color=TEXT, button_secondary_border_color=LINE,
+)
+_v = {k: v for k, v in _v.items() if hasattr(_t, k)}
+THEME = _t.set(**_v, **{k + "_dark": v for k, v in _v.items() if hasattr(_t, k + "_dark")})
+
 CSS = """
-.gradio-container {max-width: 1100px !important}
-#hero h1 {font-size: 44px; margin: 0}
-#hero p {opacity: .7; margin-top: 4px}
+.gradio-container {max-width: 1080px !important; margin: 0 auto !important; padding: 28px 20px 60px !important}
+footer {display: none !important}
+#hero {text-align: center; padding: 26px 0 30px}
+#hero .eyebrow {display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+  color: #ff8a5c; background: #2a1a12; border: 1px solid #4a2a1a; padding: 6px 12px; border-radius: 999px}
+#hero h1 {font-size: 56px; line-height: 1.05; font-weight: 800; letter-spacing: -0.03em; margin: 18px 0 12px;
+  background: linear-gradient(180deg, #ffffff, #b9b6ae); -webkit-background-clip: text; background-clip: text; color: transparent}
+#hero h1 span {background: linear-gradient(135deg, #ff6b35, #ff3d6e); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent}
+#hero p {color: #8b8a93; font-size: 17px; margin: 0}
+.step {display: flex; align-items: center; gap: 12px; margin: 26px 0 10px}
+.step b {width: 28px; height: 28px; border-radius: 999px; display: grid; place-items: center; font-size: 13px;
+  background: linear-gradient(135deg, #ff6b35, #ff3d6e); color: #fff}
+.step span {font-size: 18px; font-weight: 700; color: #f2efe9}
+.step em {font-style: normal; color: #8b8a93; font-size: 14px; margin-left: 4px}
+#status {text-align: center; color: #8b8a93; min-height: 0}
+.hint {color: #8b8a93; font-size: 13px; line-height: 1.55; padding: 4px 6px}
+#status p {margin: 6px 0}
+#prev img {border-radius: 12px; cursor: crosshair}
+#note {text-align: center; color: #5f5e66; font-size: 13px; margin-top: 28px}
+.tab-nav button.selected, button[role=tab][aria-selected=true] {color: #ff8a5c !important; border-color: #ff6b35 !important}
 """
-with gr.Blocks(title="liveclip", css=CSS, theme=gr.themes.Soft(primary_hue="orange")) as ui:
+
+
+def step(n, title, hint=""):
+    gr.HTML(f'<div class="step"><b>{n}</b><span>{title}</span><em>{hint}</em></div>')
+
+
+with gr.Blocks(title="liveclip") as ui:
     st = gr.State(None)
-    gr.Markdown("# Long video. Big moments.\nPaste a link, mark the face and the gameplay, get vertical clips with captions.",
-                elem_id="hero")
-    with gr.Row():
-        url = gr.Textbox(label="1. Video link (YouTube / Twitch)", placeholder="https://www.youtube.com/watch?v=...", scale=4)
-        file = gr.File(label="or drop a video file", file_types=["video"], type="filepath", scale=2)
-    get = gr.Button("Get preview", variant="primary")
-    status = gr.Markdown()
-    with gr.Row():
+    gr.HTML('<div id="hero"><div class="eyebrow">liveclip · free &amp; open source</div>'
+            '<h1>Long video.<br><span>Big moments.</span></h1>'
+            '<p>Paste a stream, mark the face and the gameplay, get vertical clips with captions.</p></div>')
+
+    step(1, "Add your video", "a YouTube / Twitch link, or a file from your laptop")
+    with gr.Group():
+        with gr.Tabs():
+            with gr.Tab("Paste a link"):
+                url = gr.Textbox(show_label=False, placeholder="https://www.youtube.com/watch?v=...", container=False)
+            with gr.Tab("Upload a file"):
+                file = gr.File(show_label=False, file_types=["video"], type="filepath", height=140)
+    get = gr.Button("Get preview  →", variant="primary", size="lg")
+    status = gr.Markdown(elem_id="status")
+
+    step(2, "Mark the boxes", "pick a box, then click two opposite corners on the frame")
+    with gr.Row(equal_height=False):
         with gr.Column(scale=3):
-            prev = gr.Image(label="2. Click two corners for each box", interactive=False, type="pil")
+            prev = gr.Image(show_label=False, interactive=False, type="pil", elem_id="prev", height=420)
         with gr.Column(scale=2):
-            which = gr.Radio(["Face box", "Gameplay box"], value="Face box", label="Which box are you marking?")
-            clear = gr.Button("Clear boxes")
-            gr.Markdown("**3. Settings**")
+            which = gr.Radio(["Face box", "Gameplay box"], value="Face box", label="Now marking")
+            clear = gr.Button("Clear boxes", variant="secondary")
+            gr.HTML('<div class="hint"><b style="color:#ff8a5c">Face box</b> = the streamer\'s camera.<br>'
+                    '<b style="color:#5cc8ff">Gameplay box</b> = the game.<br>Skip the face box for a gameplay-only clip.</div>')
+
+    step(3, "Choose your style")
+    with gr.Group():
+        with gr.Row():
             n = gr.Slider(1, 10, value=4, step=1, label="Number of clips")
-            length = gr.Slider(15, 60, value=30, step=5, label="Clip length (seconds)")
-            face_pct = gr.Slider(25, 50, value=35, step=1, label="Face size (% of the screen)")
+            length = gr.Slider(15, 60, value=30, step=5, label="Clip length (sec)")
+            face_pct = gr.Slider(25, 50, value=35, step=1, label="Face size (%)")
+        with gr.Row():
             style = gr.Radio(STYLES, value="Yellow pop", label="Caption style")
             lang = gr.Radio(["Hinglish", "English (translate)", "Off"], value="Hinglish", label="Captions")
-            go = gr.Button("Make clips", variant="primary", size="lg")
-    gallery = gr.Gallery(label="Your clips", columns=4, height="auto")
+    go = gr.Button("Make clips  ✦", variant="primary", size="lg")
+
+    step(4, "Your clips", "saved in the clips folder too")
+    gallery = gr.Gallery(show_label=False, columns=4, height="auto", object_fit="contain")
     files = gr.Files(label="Download")
-    gr.Markdown("Only clip creators who allow it or run a clipping program. Clips without permission get strikes and no payout.")
+    gr.Markdown("Only clip creators who allow it or run a clipping program. Clips without permission get strikes and no payout.",
+                elem_id="note")
 
     get.click(load, [url, file], [prev, st, status])
     prev.select(click, [st, which], [prev, st, status])
@@ -249,4 +319,5 @@ with gr.Blocks(title="liveclip", css=CSS, theme=gr.themes.Soft(primary_hue="oran
     go.click(clip_all, [st, n, length, face_pct, style, lang], [gallery, files, status])
 
 if __name__ == "__main__":
-    ui.queue().launch(inbrowser=True, allowed_paths=[OUT])
+    ui.queue().launch(inbrowser=True, allowed_paths=[OUT], theme=THEME, css=CSS,
+                      js="() => { document.body.classList.add('dark'); }")
