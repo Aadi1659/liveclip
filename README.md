@@ -15,6 +15,20 @@ All four tools are free and open source. The catch: it only works while the stre
 
 ---
 
+## 💻 On your laptop: the clip app (easiest)
+
+Paste a video link, mark the streamer's face and the gameplay, get vertical clips with captions.
+
+1. Download this repo (green **Code** button → **Download ZIP**) and unzip it.
+2. **Mac:** double-click **Start liveclip**. The first time it sets itself up (a few minutes); after that it opens straight away.
+3. Your browser opens the liveclip page. Paste a YouTube or Twitch video link (or drop a video file) → **Get preview**.
+4. Pick **Face box**, click two corners around the streamer's face. Pick **Gameplay box**, click two corners around the game.
+5. Choose the number of clips, clip length, face size and caption style → **Make clips**. Clips show up below and are saved in the `clips` folder.
+
+It finds the moments from loudness peaks (shouting, hype, big reactions). For live streams, use the live clipper below.
+
+---
+
 ## 📱 On your phone (free, no install)
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Aadi1659/liveclip/blob/main/liveclip_colab.ipynb)
