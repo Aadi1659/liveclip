@@ -1,6 +1,8 @@
 streamlink>=7.0
 faster-whisper>=1.0
 pillow>=10.0
-gradio>=4.44
+fastapi
+uvicorn
+python-multipart
 yt-dlp
 numpy

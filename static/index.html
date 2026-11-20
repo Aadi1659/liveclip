@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>liveclip</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --glass: rgba(20, 8, 36, 0.48);
+  --glass-2: rgba(255, 255, 255, 0.06);
+  --line: rgba(255, 255, 255, 0.14);
+  --line-2: rgba(255, 255, 255, 0.24);
+  --text: #ffffff;
+  --muted: rgba(255, 255, 255, 0.66);
+  --dim: rgba(255, 255, 255, 0.42);
+  --acc: #ff6b35;
+  --acc2: #ff2f7a;
+  --face: #ff9a5c;
+  --game: #5ad1ff;
+  --grad: linear-gradient(135deg, var(--acc), var(--acc2));
+}
+* { box-sizing: border-box; margin: 0; padding: 0 }
+html, body { height: 100% }
+body {
+  font-family: Inter, system-ui, -apple-system, sans-serif; color: var(--text); background: #14061f;
+  -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+/* Vice City sunset */
+.sky { position: fixed; inset: 0; z-index: -3;
+  background:
+    radial-gradient(60vw 45vh at 82% 0%, rgba(255, 47, 122, .45), transparent 70%),
+    radial-gradient(55vw 50vh at 0% 15%, rgba(120, 52, 255, .45), transparent 70%),
+    linear-gradient(180deg, #14061f 0%, #2b0b4a 32%, #6d1660 58%, #d0245f 80%, #ff7a3d 100%); }
+.sun { position: fixed; left: 50%; bottom: 14vh; width: 46vh; height: 46vh; transform: translateX(-50%); z-index: -2; border-radius: 50%;
+  background: linear-gradient(180deg, #ffd36b 0%, #ff8a4c 45%, #ff2f7a 100%); opacity: .55; filter: blur(.5px);
+  -webkit-mask: repeating-linear-gradient(180deg, #000 0 14px, transparent 14px 20px); mask: repeating-linear-gradient(180deg, #000 0 14px, transparent 14px 20px); }
+.grid { position: fixed; left: -20%; right: -20%; bottom: 0; height: 32vh; z-index: -1; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, .10) 0 1px, transparent 1px 40px),
+              repeating-linear-gradient(90deg, rgba(255, 255, 255, .10) 0 1px, transparent 1px 40px);
+  transform: perspective(380px) rotateX(58deg); transform-origin: bottom;
+  -webkit-mask: linear-gradient(0deg, #000 20%, transparent); mask: linear-gradient(0deg, #000 20%, transparent); }
+
+.wrap { max-width: 1280px; margin: 0 auto; padding: 18px 28px 28px; min-height: 100vh; display: flex; flex-direction: column; gap: 16px }
+
+/* nav */
+nav { display: flex; align-items: center; justify-content: space-between }
+.brand { display: flex; align-items: center; gap: 11px; text-decoration: none; color: var(--text) }
+.brand .mark { width: 38px; height: 38px; border-radius: 12px; background: var(--grad); display: grid; place-items: center;
+  box-shadow: 0 8px 26px rgba(255, 47, 122, .55), inset 0 1px 0 rgba(255, 255, 255, .45) }
+.brand .word { font-size: 23px; font-weight: 800; letter-spacing: -.03em }
+.brand .word b { background: linear-gradient(135deg, #ffb37a, #ff4f8f); -webkit-background-clip: text; -webkit-text-fill-color: transparent }
+.brand .tag { font-size: 11px; font-weight: 600; color: var(--muted); border: 1px solid var(--line); padding: 3px 8px; border-radius: 99px; margin-left: 4px }
+.links { display: flex; gap: 10px }
+.pill { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px; border-radius: 99px; font-size: 14px; font-weight: 600;
+  color: var(--text); text-decoration: none; background: var(--glass-2); border: 1px solid var(--line-2);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18);
+  transition: transform .15s, background .15s }
+.pill:hover { transform: translateY(-1px); background: rgba(255, 255, 255, .14) }
+.pill.ig { background: linear-gradient(135deg, rgba(131, 58, 180, .65), rgba(225, 48, 108, .6), rgba(252, 176, 69, .55)); border-color: rgba(255, 255, 255, .3) }
+
+/* hero */
+.hero { text-align: center; padding: 2px 0 2px }
+.hero h1 { font-size: clamp(30px, 3.6vw, 46px); font-weight: 800; letter-spacing: -.035em; line-height: 1.05 }
+.hero h1 span { background: linear-gradient(135deg, #ffb37a 0%, #ff6b35 40%, #ff2f7a 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent }
+.hero p { margin-top: 8px; color: var(--muted); font-size: 15px }
+
+/* layout */
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; flex: 1; min-height: 0 }
+.card { background: var(--glass); border: 1px solid var(--line); border-radius: 24px; padding: 18px;
+  backdrop-filter: blur(24px) saturate(150%); -webkit-backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: 0 20px 60px rgba(8, 0, 24, .45), inset 0 1px 0 rgba(255, 255, 255, .14) }
+.left { display: flex; flex-direction: column; gap: 14px; min-width: 0 }
+.label { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; letter-spacing: .02em; color: var(--text); margin-bottom: 10px }
+.label .n { width: 22px; height: 22px; border-radius: 99px; background: var(--grad); display: grid; place-items: center; font-size: 12px;
+  box-shadow: 0 4px 14px rgba(255, 47, 122, .5) }
+.label .h { color: var(--dim); font-weight: 500; letter-spacing: 0 }
+
+/* input row */
+.inrow { display: flex; gap: 10px }
+.field { flex: 1; display: flex; align-items: center; gap: 10px; height: 50px; padding: 0 8px 0 16px; border-radius: 15px;
+  background: rgba(8, 2, 18, .5); border: 1px solid var(--line); transition: border-color .15s, box-shadow .15s }
+.field:focus-within { border-color: rgba(255, 138, 92, .8); box-shadow: 0 0 0 4px rgba(255, 107, 53, .15) }
+.field input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font: 500 15px Inter, sans-serif }
+.field input::placeholder { color: var(--dim) }
+.upl { height: 36px; padding: 0 12px; border-radius: 10px; background: var(--glass-2); border: 1px solid var(--line); color: var(--muted);
+  font: 600 13px Inter, sans-serif; cursor: pointer; white-space: nowrap }
+.upl:hover { color: var(--text); background: rgba(255, 255, 255, .12) }
+.btn { height: 50px; padding: 0 22px; border: 0; border-radius: 15px; background: var(--grad); color: #fff; cursor: pointer;
+  font: 700 15px Inter, sans-serif; box-shadow: 0 10px 30px rgba(255, 47, 122, .45), inset 0 1px 0 rgba(255, 255, 255, .4);
+  transition: transform .15s, filter .15s; white-space: nowrap }
+.btn:hover { transform: translateY(-1px); filter: brightness(1.08) }
+.btn:disabled { opacity: .55; cursor: default; transform: none }
+
+/* stage */
+.stagecard { flex: 1; display: flex; flex-direction: column; min-height: 0 }
+.stage { position: relative; flex: 1; min-height: 260px; border-radius: 16px; overflow: hidden; background: rgba(0, 0, 0, .28);
+  border: 1px dashed var(--line-2); display: grid; place-items: center; user-select: none }
+.stage.has { border-style: solid; border-color: var(--line) }
+.stage .empty { text-align: center; color: var(--dim); font-size: 14px; line-height: 1.6 }
+.stage .empty b { display: block; color: var(--muted); font-size: 15px; margin-bottom: 2px }
+.imgbox { position: relative; max-width: 100%; max-height: 100%; display: none; cursor: crosshair }
+.imgbox img { display: block; max-width: 100%; max-height: calc(100vh - 360px); min-height: 200px; border-radius: 10px }
+.box { position: absolute; border: 3px solid; border-radius: 8px; pointer-events: none }
+.box span { position: absolute; top: -26px; left: -3px; font: 800 11px Inter, sans-serif; letter-spacing: .08em; padding: 4px 8px; border-radius: 6px; color: #120518 }
+.box.face { border-color: var(--face); background: rgba(255, 154, 92, .14) } .box.face span { background: var(--face) }
+.box.game { border-color: var(--game); background: rgba(90, 209, 255, .10) } .box.game span { background: var(--game) }
+.tools { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap }
+.seg { display: inline-flex; padding: 4px; border-radius: 13px; background: rgba(8, 2, 18, .5); border: 1px solid var(--line) }
+.seg button { height: 34px; padding: 0 14px; border: 0; border-radius: 10px; background: none; color: var(--muted); cursor: pointer;
+  font: 600 13px Inter, sans-serif; display: inline-flex; align-items: center; gap: 8px }
+.seg button i { width: 9px; height: 9px; border-radius: 3px; display: inline-block }
+.seg button.on { background: rgba(255, 255, 255, .14); color: var(--text); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2) }
+.ghost { height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: none; color: var(--muted);
+  font: 600 13px Inter, sans-serif; cursor: pointer }
+.ghost:hover { color: var(--text); border-color: var(--line-2) }
+.tip { color: var(--dim); font-size: 13px; margin-left: auto }
+
+/* settings */
+.right { display: flex; flex-direction: column; gap: 16px }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px }
+.k { font-size: 13px; font-weight: 600; color: var(--muted) }
+.stepper { display: inline-flex; align-items: center; border-radius: 12px; border: 1px solid var(--line); background: rgba(8, 2, 18, .5) }
+.stepper button { width: 34px; height: 34px; border: 0; background: none; color: var(--text); font-size: 18px; cursor: pointer }
+.stepper output { width: 30px; text-align: center; font-weight: 700 }
+.chips { display: flex; gap: 6px }
+.chip { height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: rgba(8, 2, 18, .5); color: var(--muted);
+  font: 600 13px Inter, sans-serif; cursor: pointer }
+.chip.on { color: #fff; border-color: transparent; background: var(--grad); box-shadow: 0 6px 18px rgba(255, 47, 122, .4) }
+.facerow { display: grid; grid-template-columns: 1fr 58px; gap: 14px; align-items: center }
+input[type=range] { width: 100%; -webkit-appearance: none; height: 6px; border-radius: 99px; outline: 0;
+  background: linear-gradient(90deg, var(--acc), var(--acc2)) 0 / var(--p, 40%) 100% no-repeat, rgba(255, 255, 255, .14) }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #fff;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .35); cursor: pointer }
+.phone { width: 58px; height: 103px; border-radius: 10px; border: 2px solid var(--line-2); overflow: hidden; display: flex; flex-direction: column }
+.phone .pf { background: linear-gradient(180deg, rgba(255, 154, 92, .75), rgba(255, 154, 92, .45)) }
+.phone .pg { flex: 1; background: linear-gradient(180deg, rgba(90, 209, 255, .5), rgba(90, 209, 255, .25)) }
+.styles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px }
+.sty { height: 64px; border-radius: 14px; border: 1px solid var(--line); background: rgba(8, 2, 18, .55); cursor: pointer; display: grid; place-items: center;
+  font: 900 15px "Arial Black", Inter, sans-serif; position: relative }
+.sty small { position: absolute; bottom: 5px; font: 600 10px Inter, sans-serif; color: var(--dim) }
+.sty.on { border-color: rgba(255, 138, 92, .9); box-shadow: 0 0 0 3px rgba(255, 107, 53, .22) }
+.s1 em { font-style: normal; color: #fff; -webkit-text-stroke: 1px #000; text-shadow: 0 2px 0 #000 }
+.s2 em { font-style: normal; color: #ffe14d; -webkit-text-stroke: 1px #000; text-shadow: 0 2px 0 #000 }
+.s3 em { font-style: normal; color: #111; background: #fff; padding: 2px 7px; border-radius: 6px; font: 700 13px Inter, sans-serif }
+select { height: 34px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: rgba(8, 2, 18, .5); color: #fff; font: 600 13px Inter, sans-serif }
+.go { width: 100%; height: 56px; font-size: 16px; margin-top: auto }
+.prog { height: 6px; border-radius: 99px; background: rgba(255, 255, 255, .12); overflow: hidden; display: none }
+.prog i { display: block; height: 100%; width: 0; background: var(--grad); transition: width .4s }
+.msg { font-size: 13px; color: var(--muted); text-align: center; min-height: 18px }
+.msg.err { color: #ffb4b4 }
+
+/* results */
+.results { display: none }
+.results .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px }
+.clips { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px }
+.clip { border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: #000 }
+.clip video { width: 100%; aspect-ratio: 9/16; display: block; object-fit: cover }
+.clip a { display: block; text-align: center; padding: 9px; font: 600 13px Inter, sans-serif; color: #fff; text-decoration: none; background: rgba(255, 255, 255, .08) }
+.clip a:hover { background: rgba(255, 255, 255, .16) }
+footer { text-align: center; font-size: 12px; color: rgba(255, 255, 255, .55) }
+@media (max-width: 920px) { .main { grid-template-columns: 1fr } .tip { display: none } }
+</style>
+</head>
+<body>
+<div class="sky"></div><div class="sun"></div><div class="grid"></div>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="https://github.com/Aadi1659/liveclip" target="_blank">
+      <span class="mark"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="5" y="2.5" width="11" height="19" rx="3" stroke="#fff" stroke-width="2.2"/><path d="M9.2 9v6l4.8-3z" fill="#fff"/><circle cx="19.5" cy="5" r="2.4" fill="#fff"/></svg></span>
+      <span class="word">live<b>clip</b></span><span class="tag">free · open source</span>
+    </a>
+    <div class="links">
+      <a class="pill ig" href="https://www.instagram.com/aaditya.knows/" target="_blank">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1.2" fill="#fff" stroke="none"/></svg>
+        @aaditya.knows</a>
+      <a class="pill" href="https://github.com/Aadi1659/liveclip" target="_blank">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="#ffd34d"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>
+        Star on GitHub</a>
+    </div>
+  </nav>
+
+  <div class="hero">
+    <h1>Long video. <span>Big moments.</span></h1>
+    <p>Paste a stream, mark the face and the gameplay, get vertical clips with captions.</p>
+  </div>
+
+  <div class="main">
+    <div class="left">
+      <div class="card">
+        <div class="label"><span class="n">1</span>Add your video <span class="h">YouTube / Twitch link, or a file</span></div>
+        <div class="inrow">
+          <label class="field">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="2"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
+            <input id="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+            <button class="upl" id="uplBtn" type="button">Upload file</button>
+            <input id="file" type="file" accept="video/*" hidden>
+          </label>
+          <button class="btn" id="load">Get preview →</button>
+        </div>
+      </div>
+
+      <div class="card stagecard">
+        <div class="label"><span class="n">2</span>Mark the boxes <span class="h">drag a box over the face, then over the game</span></div>
+        <div class="stage" id="stage">
+          <div class="empty" id="empty"><b>Your preview shows up here</b>Paste a link above and hit Get preview</div>
+          <div class="imgbox" id="imgbox"><img id="img" alt="" draggable="false"></div>
+        </div>
+        <div class="tools">
+          <div class="seg" id="which">
+            <button class="on" data-k="face"><i style="background:var(--face)"></i>Face box</button>
+            <button data-k="game"><i style="background:var(--game)"></i>Gameplay box</button>
+          </div>
+          <button class="ghost" id="clear">Clear</button>
+          <span class="tip">No face box = gameplay-only clip</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card right">
+      <div class="label" style="margin:0"><span class="n">3</span>Your style</div>
+      <div class="row"><span class="k">Number of clips</span>
+        <div class="stepper"><button data-d="-1">−</button><output id="n">4</output><button data-d="1">+</button></div></div>
+      <div class="row"><span class="k">Clip length</span>
+        <div class="chips" id="len"><button class="chip" data-v="15">15s</button><button class="chip on" data-v="30">30s</button><button class="chip" data-v="45">45s</button><button class="chip" data-v="60">60s</button></div></div>
+      <div>
+        <div class="row" style="margin-bottom:10px"><span class="k">Face size</span><span class="k" id="facev" style="color:#fff">35%</span></div>
+        <div class="facerow">
+          <input type="range" id="face" min="25" max="50" value="35">
+          <div class="phone"><div class="pf" id="pf" style="height:35%"></div><div class="pg"></div></div>
+        </div>
+      </div>
+      <div>
+        <div class="k" style="margin-bottom:10px">Caption style</div>
+        <div class="styles" id="style">
+          <button class="sty s1" data-v="Bold white"><em>BHAI!</em><small>Bold white</small></button>
+          <button class="sty s2 on" data-v="Yellow pop"><em>BHAI!</em><small>Yellow pop</small></button>
+          <button class="sty s3" data-v="White box"><em>bhai!</em><small>White box</small></button>
+        </div>
+      </div>
+      <div class="row"><span class="k">Captions</span>
+        <select id="lang"><option>Hinglish</option><option>English (translate)</option><option>Off</option></select></div>
+      <div class="prog" id="prog"><i id="bar"></i></div>
+      <div class="msg" id="msg"></div>
+      <button class="btn go" id="go" disabled>Make clips ✦</button>
+    </div>
+  </div>
+
+  <div class="card results" id="results">
+    <div class="top"><div class="label" style="margin:0"><span class="n">4</span>Your clips <span class="h">also saved in the clips folder</span></div>
+      <button class="ghost" id="folder">Open folder</button></div>
+    <div class="clips" id="clips"></div>
+  </div>
+
+  <footer>Only clip creators who allow it or run a clipping program. Clips without permission get strikes and no payout.</footer>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const S = { w: 0, h: 0, face: null, game: null, which: "face", n: 4, len: 30, style: "Yellow pop" };
+const msg = (t, err) => { $("#msg").textContent = t || ""; $("#msg").classList.toggle("err", !!err); };
+
+// 1. load
+$("#uplBtn").onclick = e => { e.preventDefault(); $("#file").click(); };
+$("#file").onchange = () => { const f = $("#file").files[0]; if (f) { $("#url").value = f.name; load(); } };
+$("#url").onkeydown = e => { if (e.key === "Enter") load(); };
+$("#load").onclick = load;
+async function load() {
+  const fd = new FormData(), f = $("#file").files[0];
+  if (f && $("#url").value === f.name) fd.append("file", f); else fd.append("url", $("#url").value);
+  $("#load").disabled = true; $("#load").textContent = "Loading…"; msg(f ? "Uploading your video…" : "Downloading the video (720p). Long streams take a minute…");
+  try {
+    const r = await fetch("/api/load", { method: "POST", body: fd }), j = await r.json();
+    if (!r.ok) throw new Error(j.detail || "Couldn't load that video");
+    S.w = j.w; S.h = j.h; S.face = S.game = null;
+    $("#img").src = j.preview; $("#empty").style.display = "none"; $("#imgbox").style.display = "inline-block"; $("#stage").classList.add("has");
+    draw(); $("#go").disabled = false;
+    msg(`Loaded · ${Math.floor(j.dur / 60)} min ${j.dur % 60} s. Drag a box over the face.`);
+  } catch (e) { msg(e.message, true); }
+  $("#load").disabled = false; $("#load").textContent = "Get preview →";
+}
+
+// 2. drag boxes
+document.querySelectorAll("#which button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#which button").forEach(x => x.classList.toggle("on", x === b)); S.which = b.dataset.k; });
+$("#clear").onclick = () => { S.face = S.game = null; draw(); };
+let drag = null;
+const pt = e => { const r = $("#img").getBoundingClientRect();
+  return [Math.max(0, Math.min(r.width, e.clientX - r.left)) * S.w / r.width, Math.max(0, Math.min(r.height, e.clientY - r.top)) * S.h / r.height]; };
+$("#imgbox").onmousedown = e => { drag = pt(e); e.preventDefault(); };
+window.onmousemove = e => { if (!drag) return; const p = pt(e);
+  S[S.which] = [Math.min(drag[0], p[0]), Math.min(drag[1], p[1]), Math.max(drag[0], p[0]), Math.max(drag[1], p[1])]; draw(); };
+window.onmouseup = () => { if (!drag) return; drag = null;
+  if (S.which === "face" && S.face && !S.game) { $("#which [data-k=game]").click(); msg("Face set. Now drag a box over the gameplay."); }
+  else if (S.game) msg("Boxes set. Choose your style and hit Make clips."); };
+function draw() {
+  document.querySelectorAll(".box").forEach(b => b.remove());
+  const r = $("#img").getBoundingClientRect(), k = r.width / (S.w || 1);
+  for (const key of ["face", "game"]) { const b = S[key]; if (!b) continue;
+    const d = document.createElement("div"); d.className = "box " + key;
+    Object.assign(d.style, { left: b[0] * k + "px", top: b[1] * k + "px", width: (b[2] - b[0]) * k + "px", height: (b[3] - b[1]) * k + "px" });
+    d.innerHTML = `<span${b[1] * k < 30 ? ' style="top:6px;left:6px"' : ""}>${key === "face" ? "FACE" : "GAMEPLAY"}</span>`; $("#imgbox").appendChild(d); }
+}
+window.onresize = draw; $("#img").onload = draw;
+
+// 3. settings
+document.querySelectorAll(".stepper button").forEach(b => b.onclick = () => { S.n = Math.max(1, Math.min(10, S.n + +b.dataset.d)); $("#n").textContent = S.n; });
+const pick = (sel, key) => document.querySelectorAll(sel + " button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(sel + " button").forEach(x => x.classList.toggle("on", x === b)); S[key] = isNaN(b.dataset.v) ? b.dataset.v : +b.dataset.v; });
+pick("#len", "len"); pick("#style", "style");
+const face = $("#face"); const upd = () => { $("#facev").textContent = face.value + "%"; $("#pf").style.height = face.value + "%";
+  face.style.setProperty("--p", ((face.value - 25) / 25 * 100) + "%"); }; face.oninput = upd; upd();
+
+// 4. make clips
+$("#go").onclick = async () => {
+  const body = { face: S.face, game: S.game, n: S.n, length: S.len, face_pct: +face.value, style: S.style, lang: $("#lang").value };
+  const r = await fetch("/api/clip", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) { msg((await r.json()).detail, true); return; }
+  $("#go").disabled = true; $("#prog").style.display = "block"; poll();
+};
+async function poll() {
+  const j = await (await fetch("/api/status")).json();
+  $("#bar").style.width = Math.round(j.progress * 100) + "%"; msg(j.error || j.msg, !!j.error);
+  if (j.clips.length && j.clips.length !== $("#clips").children.length) {
+    $("#results").style.display = "block";
+    $("#clips").innerHTML = j.clips.map(c => `<div class="clip"><video src="${c}" controls muted playsinline preload="metadata"></video><a href="${c}" download>Download</a></div>`).join("");
+  }
+  if (j.busy) setTimeout(poll, 1200); else { $("#go").disabled = false; setTimeout(() => $("#prog").style.display = "none", 1500);
+    if (j.clips.length) $("#results").scrollIntoView({ behavior: "smooth" }); }
+}
+$("#folder").onclick = () => fetch("/api/open-folder", { method: "POST" });
+</script>
+</body>
+</html>
