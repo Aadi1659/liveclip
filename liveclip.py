@@ -437,11 +437,21 @@ def ts(s):
 
 # ------------------------------------------------------------------ recorded videos (no live chat: loudness peaks)
 YTDLP = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-playlist"]
+# YouTube often blocks cloud computers (Colab) with "Sign in to confirm you're not a bot". Asking as a different YouTube
+# app sometimes gets through, so is_live() tries these in order and every later download reuses the one that worked.
+CLIENTS = [[], *[["--extractor-args", f"youtube:player_client={c}"] for c in ("tv_simply", "tv", "web_safari", "mweb", "android_vr")]]
+CLIENT = []
+BLOCKED = ("YouTube is blocking Google's free computers right now, so this YouTube link can't be opened here. "
+           "Paste the streamer's Twitch link instead (Twitch works), or try this YouTube link again in a few hours.")
+
+
+def is_bot_block(err):
+    return "not a bot" in err or "Sign in to confirm" in err or "HTTP Error 429" in err
 
 
 def ytdlp(args, label):
     """Run yt-dlp, printing the download % every 10% (long streams take minutes). Raises on failure."""
-    p = subprocess.Popen([*YTDLP, "--newline", "--progress-template", "download:PCT %(progress._percent_str)s", *args],
+    p = subprocess.Popen([*YTDLP, *CLIENT, "--newline", "--progress-template", "download:PCT %(progress._percent_str)s", *args],
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     shown, tail = -10, deque(maxlen=5)
     for line in p.stdout:
@@ -453,12 +463,20 @@ def ytdlp(args, label):
         elif line:
             tail.append(line)
     if p.wait():
+        if any(is_bot_block(t) for t in tail): raise SystemExit(BLOCKED)
         raise RuntimeError(next((t for t in reversed(tail) if "ERROR" in t), tail[-1] if tail else "download failed"))
 
 
 def is_live(url):
     """True/False from yt-dlp; raises with a readable message when the link can't be opened."""
-    r = subprocess.run([*YTDLP, "--skip-download", "--print", "%(is_live)s", url], capture_output=True, text=True)
+    global CLIENT
+    for c in CLIENTS:
+        r = subprocess.run([*YTDLP, *c, "--skip-download", "--print", "%(is_live)s", url], capture_output=True, text=True)
+        if r.returncode == 0 or not is_bot_block(r.stderr): break
+        say("YouTube asked for a bot check, trying another way…")
+    else:
+        raise SystemExit(BLOCKED)
+    CLIENT = c
     if r.returncode:
         err = (r.stderr.strip().splitlines() or ["unknown error"])[-1]
         if "not currently live" in err or "offline" in err.lower():
