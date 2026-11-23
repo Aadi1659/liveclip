@@ -37,6 +37,8 @@ It finds the moments from loudness peaks (shouting, hype, big reactions). For li
 2. Paste a YouTube or Twitch link in the box: a **live stream** or a **finished video** (YouTube app: **Share → Copy link**). Tap the **▶ play button**. If Colab says *"This notebook was not authored by Google"*, tap **Run anyway**.
 3. Keep the tab open. Clips show up under the box with a **Download** button: **streamer's face on top, gameplay below, captions on.**
 
+**On an iPhone**, tick **iphone_save_to_google_drive** first: iPhone browsers can't save videos from the page, so clips also go to your Google Drive (My Drive → liveclip); save them from the Drive app with ⋯ → Send a copy → Save Video. **clips** sets how many you get (1-15).
+
 Live streams are clipped when the chat explodes; finished videos at their loudest moments. It finds the facecam by itself; if it picks the wrong spot, choose the corner in **facecam** (or *no facecam*). Free Colab sessions stop after a few hours or when idle. For faster captions, pick **Runtime → Change runtime type → T4 GPU** first.
 
 ---
