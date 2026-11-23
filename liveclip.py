@@ -55,7 +55,33 @@ QUIT = threading.Event()   # set by Ctrl+C / limits: stop making new clips, but 
 LOG = os.path.join(OUT, "clips.csv")
 
 
-def say(*m): print(time.strftime("%H:%M:%S"), *m, flush=True)
+LAST_SAY = [time.time()]
+
+
+def say(*m):
+    LAST_SAY[0] = time.time()
+    print(time.strftime("%H:%M:%S"), *m, flush=True)
+
+
+class step:
+    """A slow step: prints a running timer when nothing else has been printed for a while, so it never looks stuck."""
+    def __init__(self, msg, every=15):
+        self.msg, self.every = msg, every
+
+    def __enter__(self):
+        self.t0, self.done = time.time(), threading.Event()
+        say(self.msg + "…")
+        threading.Thread(target=self._tick, daemon=True).start()
+        return self
+
+    def _tick(self):
+        while not self.done.wait(1):
+            if time.time() - LAST_SAY[0] >= self.every:
+                m, s_ = divmod(int(time.time() - self.t0), 60)
+                say(f"   still {self.msg}… {m}:{s_:02d} so far (working, don't close the tab)")
+
+    def __exit__(self, *_):
+        self.done.set()
 
 
 for tool in ("ffmpeg", "ffprobe"):
@@ -384,7 +410,8 @@ def render(raw, ss, dur, name, tmp):
         subprocess.run(["ffmpeg", "-v", "fatal", "-y", "-ss", f"{ss:.2f}", "-t", f"{dur:.2f}", "-i", raw, "-vn", "-ac", "1",
                         "-ar", "16000", "-c:a", "pcm_s16le", wav], check=True)
         try:
-            caps = transcribe(wav)
+            with step("writing the captions"):
+                caps = transcribe(wav)
         except Exception as e:
             say("captions skipped:", e); caps = []
         srt = []
@@ -396,9 +423,10 @@ def render(raw, ss, dur, name, tmp):
             srt.append(f"{i + 1}\n{ts(s)} --> {ts(e)}\n{txt}\n")
         if srt: open(os.path.join(OUT, name + ".srt"), "w").write("\n".join(srt))
     out = os.path.join(OUT, name + ".mp4")
-    subprocess.run(["ffmpeg", "-v", "fatal", "-y", *inputs, "-filter_complex", vf, "-map", f"[{last}]", "-map", "0:a:0?",
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-r", "30",
-                    "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out], check=True)
+    with step("making the vertical clip"):
+        subprocess.run(["ffmpeg", "-v", "fatal", "-y", *inputs, "-filter_complex", vf, "-map", f"[{last}]", "-map", "0:a:0?",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-r", "30",
+                        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out], check=True)
     shutil.rmtree(tmp, ignore_errors=True)
     return out
 
@@ -409,6 +437,23 @@ def ts(s):
 
 # ------------------------------------------------------------------ recorded videos (no live chat: loudness peaks)
 YTDLP = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-playlist"]
+
+
+def ytdlp(args, label):
+    """Run yt-dlp, printing the download % every 10% (long streams take minutes). Raises on failure."""
+    p = subprocess.Popen([*YTDLP, "--newline", "--progress-template", "download:PCT %(progress._percent_str)s", *args],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    shown, tail = -10, deque(maxlen=5)
+    for line in p.stdout:
+        line = line.strip()
+        m = re.match(r"PCT\s*([\d.]+)%", line)
+        if m:
+            pct = int(float(m.group(1)))
+            if pct >= shown + 10: shown = pct - pct % 10; say(f"   {label}: {shown}%")
+        elif line:
+            tail.append(line)
+    if p.wait():
+        raise RuntimeError(next((t for t in reversed(tail) if "ERROR" in t), tail[-1] if tail else "download failed"))
 
 
 def is_live(url):
@@ -447,13 +492,15 @@ def recorded():
     work = os.path.join(REC, "vod"); shutil.rmtree(work, ignore_errors=True); os.makedirs(work)
     say("recorded video: listening for the loudest moments (no live chat on a finished video)")
     audio = os.path.join(work, "audio.%(ext)s")
-    subprocess.run([*YTDLP, "-q", "-f", "ba/b[height<=480]/b", "-o", audio, a.url], check=True)
+    with step("downloading the audio (a 10-hour stream takes a few minutes)"):
+        ytdlp(["-f", "ba/b[height<=480]/b", "-o", audio, a.url], "audio downloaded")
     got = [f for f in os.listdir(work) if f.startswith("audio.")]
     if not got: sys.exit("Couldn't download that video.")
     wav = os.path.join(work, "all.wav")
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", os.path.join(work, got[0]), "-vn", "-ac", "1", "-ar", "8000",
-                    "-c:a", "pcm_s16le", wav], check=True)
-    starts = loud_moments(wav, n, length)
+    with step("finding the loudest moments"):
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", os.path.join(work, got[0]), "-vn", "-ac", "1", "-ar", "8000",
+                        "-c:a", "pcm_s16le", wav], check=True)
+        starts = loud_moments(wav, n, length)
     say(f"found {len(starts)} moment(s), making the clips")
     if a.captions != "off": threading.Thread(target=whisper, daemon=True).start()
     made = 0
@@ -463,9 +510,10 @@ def recorded():
         raw = os.path.join(tmp, "raw.mp4")
         say(f"clip {k + 1} of {len(starts)}: {int(t0 // 60)}:{int(t0 % 60):02d} into the video")
         try:
-            subprocess.run([*YTDLP, "-q", "-f", "bv*[height<=720]+ba/b[height<=720]/b", "--merge-output-format", "mp4",
-                            "--download-sections", f"*{t0:.0f}-{t0 + length:.0f}", "--force-keyframes-at-cuts",
-                            "-o", raw, a.url], check=True)
+            with step(f"downloading clip {k + 1}'s video"):
+                ytdlp(["-f", "bv*[height<=720]+ba/b[height<=720]/b", "--merge-output-format", "mp4",
+                       "--download-sections", f"*{t0:.0f}-{t0 + length:.0f}", "--force-keyframes-at-cuts",
+                       "-o", raw, a.url], "clip video")
             path = render(raw, 0, length, name, tmp)
         except Exception as e:
             say(f"clip {k + 1} failed ({e}), skipping"); continue
