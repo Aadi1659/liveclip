@@ -34,10 +34,10 @@ It finds the moments from loudness peaks (shouting, hype, big reactions). For li
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Aadi1659/liveclip/blob/main/liveclip_colab.ipynb)
 
 1. Tap **Open in Colab** above and sign in with any Google account.
-2. Paste the live stream link in the box (YouTube app: **Share → Copy link**) and tap the **▶ play button**. If Colab says *"This notebook was not authored by Google"*, tap **Run anyway**.
-3. Keep the tab open. Each clip shows up under the box as the chat spikes, with a **Download** button.
+2. Paste a YouTube or Twitch link in the box: a **live stream** or a **finished video** (YouTube app: **Share → Copy link**). Tap the **▶ play button**. If Colab says *"This notebook was not authored by Google"*, tap **Run anyway**.
+3. Keep the tab open. Clips show up under the box with a **Download** button: **streamer's face on top, gameplay below, captions on.**
 
-It runs on Google's free Colab computers, so your phone only shows the results. Free Colab sessions stop after a few hours or when idle. For faster captions, pick **Runtime → Change runtime type → T4 GPU** first.
+Live streams are clipped when the chat explodes; finished videos at their loudest moments. It finds the facecam by itself; if it picks the wrong spot, choose the corner in **facecam** (or *no facecam*). Free Colab sessions stop after a few hours or when idle. For faster captions, pick **Runtime → Change runtime type → T4 GPU** first.
 
 ---
 
@@ -77,6 +77,9 @@ The first time you run it, Whisper downloads its model (~1.5 GB for `medium`) wh
 | Option | What it does |
 | --- | --- |
 | `--pre 25 --post 6` | Seconds kept before/after the chat spike. Chat reacts a few seconds late, so most of the clip comes *before* the spike |
+| `--mode auto` | `live` (default): clip while it streams. `recorded`: a finished video or VOD, clipped at its loudest moments. `auto`: decide from the link |
+| `--face auto` | Face on top, gameplay below. `auto` finds the facecam, or give a corner: `top-left`, `top-right`, `bottom-left`, `bottom-right`. `none` (default) keeps the whole frame |
+| `--face-pct 35` | How much of the clip height the facecam gets |
 | `--spike 3` | How sudden the spike must be (3 = chat 3x faster than normal). Lower it for more clips, raise it for fewer |
 | `--cooldown 60` | Minimum seconds between two auto clips |
 | `--captions hinglish` | Hindi/English speech in Roman letters, the way people type it (default). `english` = translated to English, `off` = no captions |

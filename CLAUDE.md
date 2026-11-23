@@ -11,4 +11,6 @@ This folder is a live-stream clipper. When the user gives you a live YouTube or 
 How it works: `chatread.py` reads the chat (no login). `liveclip.py` records with Streamlink in 6 s segments and watches the chat rate in 8 s windows. When the rate is `--spike` times the stream's normal rate, it cuts `--pre` s before and `--post` s after into a 9:16 MP4 and burns in Whisper captions (drawn with Pillow, so FFmpeg doesn't need libass).
 
 
-`liveclip_colab.ipynb` is the phone version: a Colab notebook that clones this repo, installs the requirements and runs `liveclip.py` with `--device auto`, showing each clip inline with a download button. Regenerate it rather than hand-editing the JSON if the form changes.
+`--mode recorded` (or `auto`) handles finished videos: yt-dlp downloads only the audio, the loudest sustained moments are picked, and only those parts are downloaded (`--download-sections`) and cut. `--face auto` finds the facecam with OpenCV 4 Haar cascades (frontal alt2 + profile, a face in the same spot in 3+ of 8 frames); a corner name skips detection. Both modes share `render()`.
+
+`liveclip_colab.ipynb` is the phone version: a Colab notebook with one link box and a facecam dropdown. It clones this repo, installs the requirements and runs `liveclip.py --mode auto --face auto --device auto` with fixed defaults (30 s clips, up to 5), showing each clip inline with a download button. Regenerate it rather than hand-editing the JSON if the form changes.

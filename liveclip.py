@@ -17,7 +17,7 @@ import argparse, csv, os, re, shutil, signal, statistics, subprocess, sys, threa
 from collections import Counter, deque
 
 ap = argparse.ArgumentParser(description="Clip a live stream when its chat spikes.")
-ap.add_argument("url", help="YouTube or Twitch LIVE url")
+ap.add_argument("url", help="YouTube or Twitch link (live stream, or a finished video with --mode recorded/auto)")
 ap.add_argument("--out", default="clips", help="output folder (default: clips)")
 ap.add_argument("--quality", default="720p,720p60,480p,best", help="streamlink quality list")
 ap.add_argument("--pre", type=float, default=25, help="seconds before the chat spike to include (chat reacts late)")
@@ -35,7 +35,15 @@ ap.add_argument("--model", default="medium", help="Whisper model: small (fast), 
                                                   "large-v3 (best, slow)")
 ap.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto",
                 help="where Whisper runs: auto uses a GPU when there is one (Colab GPU runtime), else the CPU")
-ap.add_argument("--layout", choices=["blur", "crop"], default="blur", help="9:16 layout: blurred background or center crop")
+ap.add_argument("--layout", choices=["blur", "crop"], default="blur",
+                help="9:16 layout when there is no facecam: blurred background or center crop")
+ap.add_argument("--face", choices=["auto", "top-left", "top-right", "bottom-left", "bottom-right", "none"], default="none",
+                help="streamer facecam: auto finds it, a corner uses that corner, none = whole frame. "
+                     "With a facecam the clip is face on top, gameplay below")
+ap.add_argument("--face-pct", type=float, default=35, help="share of the clip height for the facecam (default 35)")
+ap.add_argument("--mode", choices=["auto", "live", "recorded"], default="live",
+                help="live: clip while it streams (chat spikes). recorded: a finished video or VOD (loudness peaks). "
+                     "auto: decide from the link")
 ap.add_argument("--font", default="", help="path to a .ttf font for captions")
 ap.add_argument("--keep", action="store_true", help="keep the raw recording segments when you stop")
 a = ap.parse_args()
@@ -155,6 +163,7 @@ def caption_png(text, path, W=1080):
         x = (W - d.textlength(ln, font=f)) / 2
         d.text((x, 20 + i * 90), ln, font=f, fill=(255, 255, 255, 255), stroke_width=7, stroke_fill=(0, 0, 0, 255))
     im.save(path)
+    return H
 
 
 _whisper = None
@@ -266,13 +275,109 @@ def _cut(t0, t1, name):
     open(lst, "w").write("".join(f"file '{f}'\n" for f, _, _ in segs))
     raw = os.path.join(tmp, "raw.ts")
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", raw], check=True)
-    ss, dur = max(0, t0 - segs[0][1]), t1 - t0
-    if a.layout == "blur":
+    return render(raw, max(0, t0 - segs[0][1]), t1 - t0, name, tmp)
+
+
+# ------------------------------------------------------------------ facecam: face on top, gameplay below
+FACE = None          # (cx, cy, w, h) as fractions of the frame once known; "none" = no facecam
+CORNERS = {"top-left": (0, 0), "top-right": (1, 0), "bottom-left": (0, 1), "bottom-right": (1, 1)}
+
+
+def probe_size(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                        "-of", "csv=p=0", path], capture_output=True, text=True)
+    w, h = (int(v) for v in r.stdout.strip().split(",")[:2])
+    return w, h
+
+
+def face_aspect():
+    """width/height of the facecam strip in the 1080x1920 clip, so the crop needs no stretching."""
+    return 1080 / (int(1920 * a.face_pct / 100) // 2 * 2)
+
+
+def corner_face(corner, w, h):
+    fw = 0.30                                                   # a typical facecam is ~25-30% of the frame width
+    fh = fw * w / face_aspect() / h
+    x, y = CORNERS[corner]
+    return (fw / 2 if x == 0 else 1 - fw / 2, fh / 2 if y == 0 else 1 - fh / 2, fw, fh)
+
+
+def detect_face(raw, dur, w, h):
+    """Find the streamer's facecam: a face that sits in the same spot in most sampled frames.
+    Game characters move around; the facecam doesn't. Returns (cx, cy, fw, fh) fractions or None."""
+    try:
+        import cv2
+        cv2.CascadeClassifier                                   # OpenCV 5 moved it out; 4.x has it
+    except (ImportError, AttributeError):
+        say("facecam: needs OpenCV 4 (pip install 'opencv-python-headless<5'), using the whole frame"); return None
+    hc = cv2.data.haarcascades
+    front = cv2.CascadeClassifier(os.path.join(hc, "haarcascade_frontalface_alt2.xml"))
+    side = cv2.CascadeClassifier(os.path.join(hc, "haarcascade_profileface.xml"))
+    import numpy as np
+    hits, n = [], 8                                             # (frame, cx, cy, size) as fractions of the frame
+    for k in range(n):
+        t = dur * (k + 0.5) / n
+        r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", raw, "-frames:v", "1", "-vf", "scale=1280:-2",
+                            "-f", "image2pipe", "-vcodec", "png", "-"], capture_output=True)
+        img = cv2.imdecode(np.frombuffer(r.stdout, np.uint8), cv2.IMREAD_GRAYSCALE) if r.stdout else None
+        if img is None: continue
+        img = cv2.equalizeHist(img); ih, iw = img.shape
+        found = [tuple(f) for f in front.detectMultiScale(img, 1.08, 5, minSize=(30, 30))]
+        found += [tuple(f) for f in side.detectMultiScale(img, 1.08, 5, minSize=(30, 30))]
+        found += [(iw - x - w_, y, w_, h_) for (x, y, w_, h_) in side.detectMultiScale(cv2.flip(img, 1), 1.08, 5, minSize=(30, 30))]
+        hits += [(k, (x + w_ / 2) / iw, (y + h_ / 2) / ih, w_ / iw) for (x, y, w_, h_) in found]
+    best, best_frames = [], 0
+    for _, cx, cy, _ in hits:                                   # the spot with a face in the most frames
+        group = [q for q in hits if abs(q[1] - cx) < 0.06 and abs(q[2] - cy) < 0.08]
+        frames = len({q[0] for q in group})
+        if (frames, len(group)) > (best_frames, len(best)): best, best_frames = group, frames
+    if best_frames < 3: return None
+    cx = sum(q[1] for q in best) / len(best); cy = sum(q[2] for q in best) / len(best)
+    size = sorted(q[3] for q in best)[len(best) // 2]
+    if 0.3 < cx < 0.7 and 0.3 < cy < 0.7 and size > 0.12:
+        return None                                             # a big face in the middle = a just-chatting/IRL shot, not a facecam
+    fw = min(0.45, max(0.18, size * 2.4))                       # the facecam is ~2.5x the face width
+    fh = fw * w / face_aspect() / h
+    cx = min(1 - fw / 2, max(fw / 2, cx)); cy = min(1 - fh / 2, max(fh / 2, cy))
+    return (cx, cy, fw, fh)
+
+
+def face_box(raw, dur):
+    """The facecam crop for this clip in pixels (x, y, w, h), or None for the whole-frame layout."""
+    global FACE
+    w, h = probe_size(raw)
+    if a.face == "none": return None
+    if a.face in CORNERS:
+        f = corner_face(a.face, w, h)
+    else:                                                       # auto: look once, then reuse for every clip
+        if FACE is None:
+            FACE = detect_face(raw, dur, w, h) or "none"
+            say("facecam: " + ("not found, using the whole frame" if FACE == "none" else
+                               f"found at {FACE[0]:.0%} across, {FACE[1]:.0%} down"))
+        if FACE == "none": return None
+        f = FACE
+    cx, cy, fw, fh = f
+    bw, bh = int(fw * w) // 2 * 2, int(fh * h) // 2 * 2
+    return (int(cx * w - bw / 2), int(cy * h - bh / 2), bw, bh)
+
+
+def render(raw, ss, dur, name, tmp):
+    """raw video -> OUT/name.mp4: 9:16, captions burned in. ss/dur in seconds inside raw."""
+    fb = face_box(raw, dur) if a.face != "none" else None
+    if fb:
+        x, y, bw, bh = fb
+        fh = int(1920 * a.face_pct / 100) // 2 * 2
+        vf = (f"[0:v]split[a][b];[a]crop={bw}:{bh}:{x}:{y},scale=1080:{fh}[f];"
+              f"[b]scale=1080:{1920 - fh}:force_original_aspect_ratio=increase,crop=1080:{1920 - fh}[g];[f][g]vstack[v0]")
+        cap_mid = fh                                            # captions sit on the line between face and game
+    elif a.layout == "blur":
         # blur a 270x480 copy and scale it up: looks the same, ~10x cheaper than blurring at 1080x1920
         vf = ("[0:v]split[a][b];[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=8:2,"
               "scale=1080:1920,eq=brightness=-0.08[bg];[b]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]")
+        cap_mid = None
     else:
         vf = "[0:v]scale=-2:1920,crop=1080:1920[v0]"
+        cap_mid = None
     inputs, last = ["-ss", f"{ss:.2f}", "-t", f"{dur:.2f}", "-i", raw], "v0"
     if a.captions != "off":
         wav = os.path.join(tmp, "a.wav")
@@ -284,8 +389,9 @@ def _cut(t0, t1, name):
             say("captions skipped:", e); caps = []
         srt = []
         for i, (s, e, txt) in enumerate(caps):
-            png = os.path.join(tmp, f"c{i}.png"); caption_png(txt, png); inputs += ["-i", png]
-            vf += f";[{last}][{i + 1}:v]overlay=0:H*0.70:enable='between(t,{s:.2f},{e + 0.1:.2f})'[v{i + 1}]"
+            png = os.path.join(tmp, f"c{i}.png"); ch = caption_png(txt, png); inputs += ["-i", png]
+            ypos = "H*0.70" if cap_mid is None else str(max(0, cap_mid - ch // 2))
+            vf += f";[{last}][{i + 1}:v]overlay=0:{ypos}:enable='between(t,{s:.2f},{e + 0.1:.2f})'[v{i + 1}]"
             last = f"v{i + 1}"
             srt.append(f"{i + 1}\n{ts(s)} --> {ts(e)}\n{txt}\n")
         if srt: open(os.path.join(OUT, name + ".srt"), "w").write("\n".join(srt))
@@ -299,6 +405,73 @@ def _cut(t0, t1, name):
 
 def ts(s):
     return f"{int(s // 3600):02d}:{int(s % 3600 // 60):02d}:{int(s % 60):02d},{int(s % 1 * 1000):03d}"
+
+
+# ------------------------------------------------------------------ recorded videos (no live chat: loudness peaks)
+YTDLP = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-playlist"]
+
+
+def is_live(url):
+    """True/False from yt-dlp; raises with a readable message when the link can't be opened."""
+    r = subprocess.run([*YTDLP, "--skip-download", "--print", "%(is_live)s", url], capture_output=True, text=True)
+    if r.returncode:
+        err = (r.stderr.strip().splitlines() or ["unknown error"])[-1]
+        if "not currently live" in err or "offline" in err.lower():
+            raise SystemExit("That channel isn't live right now. Paste a live link, or a link to a finished video.")
+        raise SystemExit(f"Couldn't open that link. Check it plays in your browser. ({err})")
+    return r.stdout.strip().splitlines()[-1:] == ["True"]
+
+
+def loud_moments(wav, n, length):
+    """Start times of the n loudest sustained bursts (shouting, hype), at least one clip apart."""
+    import wave, numpy as np
+    with wave.open(wav) as w:
+        x = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32)
+    sec = len(x) // 8000
+    if sec <= length: return [0.0]
+    rms = np.sqrt((x[:sec * 8000].reshape(sec, 8000) ** 2).mean(1)) + 1
+    db = 20 * np.log10(rms)
+    score = np.convolve(db - np.median(db), np.ones(6) / 6, "same")   # sustained loud bursts, not single clicks
+    picks = []
+    for i in np.argsort(score)[::-1]:
+        start = max(0, min(sec - length, int(i) - int(length * 0.6)))  # the peak lands ~60% into the clip
+        if all(abs(start - p) >= length for p in picks): picks.append(start)
+        if len(picks) >= n: break
+    return sorted(float(p) for p in picks)
+
+
+def recorded():
+    """A finished video or VOD: download the audio, find the loudest moments, download only those parts, cut them."""
+    n = a.max_clips or 5
+    length = a.pre + a.post
+    work = os.path.join(REC, "vod"); shutil.rmtree(work, ignore_errors=True); os.makedirs(work)
+    say("recorded video: listening for the loudest moments (no live chat on a finished video)")
+    audio = os.path.join(work, "audio.%(ext)s")
+    subprocess.run([*YTDLP, "-q", "-f", "ba/b[height<=480]/b", "-o", audio, a.url], check=True)
+    got = [f for f in os.listdir(work) if f.startswith("audio.")]
+    if not got: sys.exit("Couldn't download that video.")
+    wav = os.path.join(work, "all.wav")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", os.path.join(work, got[0]), "-vn", "-ac", "1", "-ar", "8000",
+                    "-c:a", "pcm_s16le", wav], check=True)
+    starts = loud_moments(wav, n, length)
+    say(f"found {len(starts)} moment(s), making the clips")
+    if a.captions != "off": threading.Thread(target=whisper, daemon=True).start()
+    made = 0
+    for k, t0 in enumerate(starts):
+        name = f"clip_{time.strftime('%Y%m%d_%H%M%S')}_{int(t0 // 60)}m{int(t0 % 60):02d}s"
+        tmp = os.path.join(work, name); os.makedirs(tmp)
+        raw = os.path.join(tmp, "raw.mp4")
+        say(f"clip {k + 1} of {len(starts)}: {int(t0 // 60)}:{int(t0 % 60):02d} into the video")
+        try:
+            subprocess.run([*YTDLP, "-q", "-f", "bv*[height<=720]+ba/b[height<=720]/b", "--merge-output-format", "mp4",
+                            "--download-sections", f"*{t0:.0f}-{t0 + length:.0f}", "--force-keyframes-at-cuts",
+                            "-o", raw, a.url], check=True)
+            path = render(raw, 0, length, name, tmp)
+        except Exception as e:
+            say(f"clip {k + 1} failed ({e}), skipping"); continue
+        made += 1; say("saved", path)
+    if not a.keep: shutil.rmtree(REC, ignore_errors=True)
+    say(f"done: {made} clip(s) in {OUT}")
 
 
 # ------------------------------------------------------------------ main loop
@@ -379,4 +552,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    mode = a.mode
+    if mode == "auto":
+        mode = "live" if is_live(a.url) else "recorded"
+        say("this is a " + ("LIVE stream: clipping when the chat spikes" if mode == "live" else "finished video"))
+    recorded() if mode == "recorded" else main()
