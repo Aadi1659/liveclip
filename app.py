@@ -4,7 +4,7 @@ Runs on your own laptop: python app.py  ->  http://127.0.0.1:7860 (the page is s
 Finished videos have no live chat, so moments are found from loudness peaks (shouting, hype, big reactions).
 For live streams use liveclip.py (it clips from chat spikes while the stream is on).
 """
-import os, shutil, subprocess, sys, tempfile, threading, time, wave, webbrowser
+import os, re, shutil, subprocess, sys, tempfile, threading, time, wave, webbrowser
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -21,9 +21,35 @@ HINGLISH = ("Nahi yaar, yaha se rasta hi nahi hai. Bhai yeh dekho, agar aap naye
             "Main abhi helicopter dhoondh raha hoon, kya scene hai, chalo chalo. Haan bhai, mast hai.")
 
 
-def run(*cmd):
-    r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-    if r.returncode: raise RuntimeError((r.stderr or "").strip().splitlines()[-1:] or "command failed")
+class Cancelled(Exception):
+    pass
+
+
+CANCEL = threading.Event()   # set by the Cancel button
+PROC = {"p": None}           # the ffmpeg / yt-dlp process running right now, so Cancel can stop it
+
+
+def check_cancel():
+    if CANCEL.is_set(): raise Cancelled()
+
+
+def run(*cmd, on_line=None):
+    """Run a command. on_line gets each stdout line (for progress). Cancel kills it."""
+    check_cancel()
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE if on_line else subprocess.DEVNULL, stderr=subprocess.PIPE,
+                         text=True, bufsize=1)
+    PROC["p"] = p
+    err = []
+    t = threading.Thread(target=lambda: err.extend(p.stderr), daemon=True); t.start()
+    try:
+        if on_line:
+            for line in p.stdout: on_line(line.strip())
+        p.wait(); t.join(2)
+    finally:
+        PROC["p"] = None
+    check_cancel()
+    if p.returncode:
+        raise RuntimeError(("".join(err)).strip().splitlines()[-1:] or "command failed")
 
 
 def duration(path):
@@ -111,7 +137,7 @@ def caption_png(text, style, path):
 
 
 # ---------- 5. cut one vertical clip ----------
-def make_clip(st, t0, length, face_pct, style, lang, name):
+def make_clip(st, t0, length, face_pct, style, lang, name, on_step=None):
     src, tmp = st["src"], os.path.join(WORK, name)
     os.makedirs(tmp, exist_ok=True)
     face, game = st["boxes"]["face"], st["boxes"]["game"]
@@ -133,17 +159,31 @@ def make_clip(st, t0, length, face_pct, style, lang, name):
         fh, cap_y = 0, int(H * 0.68)
     inputs, last = ["-ss", f"{t0:.2f}", "-t", f"{length:.2f}", "-i", src], "v0"
     if lang != "Off":
+        if on_step: on_step(0.05, "Writing captions")
         wav = os.path.join(tmp, "a.wav")
         run("ffmpeg", "-v", "error", "-y", "-ss", f"{t0:.2f}", "-t", f"{length:.2f}", "-i", src, "-vn", "-ac", "1",
             "-ar", "16000", "-c:a", "pcm_s16le", wav)
-        for i, (s, e, txt) in enumerate(captions(wav, lang)):
+        caps = captions(wav, lang)
+        check_cancel()
+        for i, (s, e, txt) in enumerate(caps):
             png = os.path.join(tmp, f"c{i}.png"); h = caption_png(txt, style, png); inputs += ["-i", png]
             vf += f";[{last}][{i + 1}:v]overlay=0:{max(0, cap_y - h // 2)}:enable='between(t,{s:.2f},{e + 0.1:.2f})'[v{i + 1}]"
             last = f"v{i + 1}"
     out = os.path.join(OUT, name + ".mp4")
-    run("ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", vf, "-map", f"[{last}]", "-map", "0:a:0?",
+    check_cancel()
+    if on_step: on_step(0.35, "Rendering")
+
+    def prog(line):  # ffmpeg -progress: out_time_us=12345678
+        if line.startswith("out_time_us=") and on_step:
+            try: on_step(0.35 + 0.65 * min(1, int(line.split("=")[1]) / 1e6 / length), "Rendering")
+            except ValueError: pass
+    try:
+        run("ffmpeg", "-v", "error", "-y", "-progress", "pipe:1", "-nostats", *inputs, "-filter_complex", vf, "-map", f"[{last}]", "-map", "0:a:0?",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-r", "30",
-        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out)
+        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out, on_line=prog)
+    except Cancelled:
+        if os.path.exists(out): os.remove(out)   # no half-made clip left in the folder
+        raise
     return out
 
 
@@ -151,7 +191,8 @@ def make_clip(st, t0, length, face_pct, style, lang, name):
 # ---------- web API ----------
 app = FastAPI()
 ST = {"src": None, "dur": 0, "boxes": {"face": None, "game": None}}
-JOB = {"busy": False, "progress": 0.0, "msg": "", "clips": [], "error": ""}
+JOB = {"busy": False, "kind": "", "progress": 0.0, "msg": "", "clips": [], "error": "", "cancelled": False, "result": None}
+DL = re.compile(r"\[download\]\s+([\d.]+)%(?:\s+of\s+~?\s*([\d.]+\w+))?(?:.*?at\s+(\S+))?(?:.*?ETA\s+(\S+))?")
 
 
 def preview_frame():
@@ -161,23 +202,78 @@ def preview_frame():
     return {"preview": f"/api/preview.jpg?t={time.time():.0f}", "w": w, "h": h, "dur": round(ST["dur"])}
 
 
+def fresh_job(kind, msg):
+    CANCEL.clear()
+    JOB.update(busy=True, kind=kind, progress=0.0, msg=msg, clips=[], error="", cancelled=False, result=None)
+
+
+def finish(fn):
+    try:
+        fn()
+    except Cancelled:
+        JOB.update(cancelled=True, error="", msg="Cancelled")
+    except Exception as e:
+        JOB.update(error=str(e), msg="Something went wrong")
+    finally:
+        JOB["busy"] = False
+
+
+def download(url, src):
+    files = {"n": 0}   # yt-dlp fetches video, then sound, then joins them
+
+    def line(t):
+        if "Destination:" in t: files["n"] += 1
+        elif t.startswith("[Merger]"): JOB.update(progress=0.97, msg="Joining video and sound")
+        m = DL.search(t)
+        if not m: return
+        pct = float(m.group(1)) / 100
+        prog = pct * 0.85 if files["n"] <= 1 else 0.85 + pct * 0.12
+        what = "Downloading video" if files["n"] <= 1 else "Downloading sound"
+        extra = " · ".join(x for x in [m.group(2) and f"{m.group(2)}", m.group(3) and m.group(3) != "Unknown" and m.group(3),
+                                         m.group(4) and m.group(4) != "Unknown" and f"{m.group(4)} left"] if x)
+        JOB.update(progress=max(JOB["progress"], min(prog, 0.97)), msg=f"{what} {pct:.0%}" + (f" · {extra}" if extra else ""))
+
+    def go():
+        try:
+            run(sys.executable, "-m", "yt_dlp", "--newline", "-f", "bv*[height<=720]+ba/b[height<=720]/b",
+                "--merge-output-format", "mp4", "-o", src, "--no-playlist", url, on_line=line)
+        except RuntimeError as e:
+            raise RuntimeError(f"Couldn't download that link. Check it opens in your browser. ({e})")
+        loaded(src)
+    finish(go)
+
+
+def loaded(src):
+    JOB.update(progress=0.99, msg="Making the preview")
+    ST.update(src=src, dur=duration(src), boxes={"face": None, "game": None})
+    JOB.update(progress=1.0, msg="Loaded", result=preview_frame())
+
+
 @app.post("/api/load")
 async def api_load(url: str = Form(""), file: UploadFile | None = File(None)):
-    if JOB["busy"]: raise HTTPException(409, "Still making clips, wait for them to finish.")
+    if JOB["busy"]: raise HTTPException(409, "Still working, wait for it to finish or hit Cancel.")
     shutil.rmtree(WORK, ignore_errors=True); os.makedirs(WORK)
     src = os.path.join(WORK, "src.mp4")
-    if file is not None and file.filename:
+    if file is not None and file.filename:   # the page shows the upload bar itself
         with open(src, "wb") as f: shutil.copyfileobj(file.file, f)
-    elif url.strip():
-        try:
-            run(sys.executable, "-m", "yt_dlp", "-f", "bv*[height<=720]+ba/b[height<=720]/b", "--merge-output-format", "mp4",
-                "-o", src, "--no-playlist", url.strip())
-        except Exception as e:
-            raise HTTPException(400, f"Couldn't download that link. Check it opens in your browser. ({e})")
-    else:
-        raise HTTPException(400, "Paste a link or choose a video file first.")
-    ST.update(src=src, dur=duration(src), boxes={"face": None, "game": None})
-    return preview_frame()
+        fresh_job("load", "Reading your video")
+        finish(lambda: loaded(src))
+        if JOB["error"]: raise HTTPException(400, JOB["error"])
+        return {"ok": True, "now": JOB["result"]}
+    if not url.strip(): raise HTTPException(400, "Paste a link or choose a video file first.")
+    ST.update(src=None)
+    fresh_job("load", "Starting the download")
+    threading.Thread(target=download, args=(url.strip(), src), daemon=True).start()
+    return {"ok": True}
+
+
+@app.post("/api/cancel")
+def api_cancel():
+    if JOB["busy"]:
+        CANCEL.set(); JOB["msg"] = "Cancelling…"
+        p = PROC["p"]
+        if p and p.poll() is None: p.kill()
+    return {"ok": True}
 
 
 @app.get("/api/preview.jpg")
@@ -186,19 +282,20 @@ def api_preview():
 
 
 def worker(opts):
-    try:
-        JOB.update(busy=True, progress=0.03, msg="Finding the best moments", clips=[], error="")
+    def go():
+        JOB.update(progress=0.02, msg="Finding the best moments")
         starts = find_moments(ST["src"], int(opts["n"]), int(opts["length"]))
         base = "clip_" + time.strftime("%Y%m%d_%H%M%S")
+        n = len(starts)
         for k, t0 in enumerate(starts):
-            JOB.update(progress=0.08 + 0.9 * k / len(starts), msg=f"Making clip {k + 1} of {len(starts)}")
-            out = make_clip(ST, t0, int(opts["length"]), int(opts["face_pct"]), opts["style"], opts["lang"], f"{base}_{int(t0)}s")
+            def step(f, what, k=k):
+                JOB.update(progress=0.06 + 0.94 * (k + f) / n, msg=f"Clip {k + 1} of {n} · {what}")
+            step(0, "Starting")
+            out = make_clip(ST, t0, int(opts["length"]), int(opts["face_pct"]), opts["style"], opts["lang"],
+                            f"{base}_{int(t0)}s", on_step=step)
             JOB["clips"].append("/clips/" + os.path.basename(out))
-        JOB.update(progress=1.0, msg=f"Done: {len(starts)} clips")
-    except Exception as e:
-        JOB.update(error=str(e), msg="Something went wrong")
-    finally:
-        JOB["busy"] = False
+        JOB.update(progress=1.0, msg=f"Done: {n} clips")
+    finish(go)
 
 
 @app.post("/api/clip")
@@ -208,7 +305,7 @@ def api_clip(opts: dict):
     def box(b):
         return tuple(int(v) for v in b) if b and abs(b[2] - b[0]) > 8 and abs(b[3] - b[1]) > 8 else None
     ST["boxes"] = {"face": box(opts.get("face")), "game": box(opts.get("game"))}
-    JOB.update(busy=True, progress=0.0, msg="Starting", clips=[], error="")
+    fresh_job("clip", "Starting")
     threading.Thread(target=worker, args=(opts,), daemon=True).start()
     return {"ok": True}
 
